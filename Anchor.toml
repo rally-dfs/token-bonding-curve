@@ -1,0 +1,12 @@
+[programs.localnet]
+anchor_token_swap = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+
+[registry]
+url = "https://anchor.projectserum.com"
+
+[provider]
+cluster = "localnet"
+wallet = "/perm/home/nick/.config/solana/id.json"
+
+[scripts]
+test = "mocha -t 1000000 tests/"

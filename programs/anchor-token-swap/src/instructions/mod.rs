@@ -16,5 +16,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod deposit_single_token_type_exact_amount_in;
+pub mod withdraw_single_token_type_exact_amount_out;
 
 pub use deposit_single_token_type_exact_amount_in::*;
+pub use withdraw_single_token_type_exact_amount_out::*;

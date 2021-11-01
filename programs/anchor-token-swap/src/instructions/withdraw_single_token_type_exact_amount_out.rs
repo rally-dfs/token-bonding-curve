@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 use crate::processor;
 
 #[derive(Accounts)]
-pub struct DepositSingleTokenTypeExactAmountIn<'info> {
+pub struct WithdrawSingleTokenTypeExactAmountOut<'info> {
     ///   0. `[]` Token-swap
     pub token_swap: AccountInfo<'info>,
     ///   1. `[]` swap authority
@@ -27,7 +27,7 @@ pub struct DepositSingleTokenTypeExactAmountIn<'info> {
     pub destination: AccountInfo<'info>,
     ///   8. `[writable]` Fee account, to receive withdrawal fees
     #[account(mut)]
-    pub fee_account: AccountInfo<'info>,
+    pub pool_fee_account: AccountInfo<'info>,
     ///   9. '[]` Token program id
     pub token_program: AccountInfo<'info>,
 }
@@ -35,9 +35,9 @@ pub struct DepositSingleTokenTypeExactAmountIn<'info> {
 ///   Withdraw one token type from the pool at the current ratio given the
 ///   exact amount out expected.
 pub fn handler(
-    ctx: Context<DepositSingleTokenTypeExactAmountIn>,
-    source_token_amount: u64,
-    minimum_pool_token_amount: u64,
+    ctx: Context<WithdrawSingleTokenTypeExactAmountOut>,
+    destination_token_amount: u64,
+    maximum_pool_token_amount: u64,
 ) -> ProgramResult {
     // TODO: maybe not the best way to do this probably, kind of defeating the purpose of
     // anchor, but lets us just use process_foo directly
@@ -46,7 +46,7 @@ pub fn handler(
         ctx.accounts.swap_authority.clone(),
         ctx.accounts.user_transfer_authority.clone(),
         ctx.accounts.pool_mint.clone(),
-        ctx.accounts.source_token.clone(),
+        ctx.accounts.pool_token_source.clone(),
         ctx.accounts.swap_token_a.clone(),
         ctx.accounts.swap_token_b.clone(),
         ctx.accounts.destination.clone(),
@@ -56,8 +56,8 @@ pub fn handler(
 
     processor::Processor::process_withdraw_single_token_type_exact_amount_out(
         ctx.program_id,
-        source_token_amount,
-        minimum_pool_token_amount,
+        destination_token_amount,
+        maximum_pool_token_amount,
         &accounts,
     )
 }

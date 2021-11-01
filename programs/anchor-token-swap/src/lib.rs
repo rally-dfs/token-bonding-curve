@@ -33,4 +33,17 @@ mod anchor_token_swap {
             minimum_pool_token_amount,
         )
     }
+
+    /// Creates a 'deposit_single_token_type_exact_amount_in' instruction.
+    pub fn withdraw_single_token_type_exact_amount_out(
+        ctx: Context<WithdrawSingleTokenTypeExactAmountOut>,
+        destination_token_amount: u64,
+        maximum_pool_token_amount: u64,
+    ) -> ProgramResult {
+        instructions::withdraw_single_token_type_exact_amount_out::handler(
+            ctx,
+            destination_token_amount,
+            maximum_pool_token_amount,
+        )
+    }
 }

@@ -21,6 +21,21 @@ declare_id!("SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8");
 mod anchor_token_swap {
     use super::*;
 
+    /// Creates a 'withdraw_all_token_types' instruction.w
+    pub fn withdraw_all_token_types(
+        ctx: Context<WithdrawAllTokenTypes>,
+        pool_token_amount: u64,
+        minimum_token_a_amount: u64,
+        minimum_token_b_amount: u64,
+    ) -> ProgramResult {
+        instructions::withdraw_all_token_types::handler(
+            ctx,
+            pool_token_amount,
+            minimum_token_a_amount,
+            minimum_token_b_amount,
+        )
+    }
+
     /// Creates a 'deposit_single_token_type_exact_amount_in' instruction.
     pub fn deposit_single_token_type_exact_amount_in(
         ctx: Context<DepositSingleTokenTypeExactAmountIn>,

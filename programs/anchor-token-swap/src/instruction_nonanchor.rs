@@ -155,36 +155,6 @@ pub enum SwapInstruction {
     ///   9. `[writable]` Fee account, to receive withdrawal fees
     ///   10 '[]` Token program id
     WithdrawAllTokenTypes(WithdrawAllTokenTypes),
-
-    ///   Deposit one type of tokens into the pool.  The output is a "pool" token
-    ///   representing ownership into the pool. Input token is converted as if
-    ///   a swap and deposit all token types were performed.
-    ///
-    ///   0. `[]` Token-swap
-    ///   1. `[]` swap authority
-    ///   2. `[]` user transfer authority
-    ///   3. `[writable]` token_(A|B) SOURCE Account, amount is transferable by user transfer authority,
-    ///   4. `[writable]` token_a Swap Account, may deposit INTO.
-    ///   5. `[writable]` token_b Swap Account, may deposit INTO.
-    ///   6. `[writable]` Pool MINT account, swap authority is the owner.
-    ///   7. `[writable]` Pool Account to deposit the generated tokens, user is the owner.
-    ///   8. '[]` Token program id
-    DepositSingleTokenTypeExactAmountIn(DepositSingleTokenTypeExactAmountIn),
-
-    ///   Withdraw one token type from the pool at the current ratio given the
-    ///   exact amount out expected.
-    ///
-    ///   0. `[]` Token-swap
-    ///   1. `[]` swap authority
-    ///   2. `[]` user transfer authority
-    ///   3. `[writable]` Pool mint account, swap authority is the owner
-    ///   4. `[writable]` SOURCE Pool account, amount is transferable by user transfer authority.
-    ///   5. `[writable]` token_a Swap Account to potentially withdraw from.
-    ///   6. `[writable]` token_b Swap Account to potentially withdraw from.
-    ///   7. `[writable]` token_(A|B) User Account to credit
-    ///   8. `[writable]` Fee account, to receive withdrawal fees
-    ///   9. '[]` Token program id
-    WithdrawSingleTokenTypeExactAmountOut(WithdrawSingleTokenTypeExactAmountOut),
 }
 
 impl SwapInstruction {
@@ -230,22 +200,22 @@ impl SwapInstruction {
                     minimum_token_b_amount,
                 })
             }
-            4 => {
-                let (source_token_amount, rest) = Self::unpack_u64(rest)?;
-                let (minimum_pool_token_amount, _rest) = Self::unpack_u64(rest)?;
-                Self::DepositSingleTokenTypeExactAmountIn(DepositSingleTokenTypeExactAmountIn {
-                    source_token_amount,
-                    minimum_pool_token_amount,
-                })
-            }
-            5 => {
-                let (destination_token_amount, rest) = Self::unpack_u64(rest)?;
-                let (maximum_pool_token_amount, _rest) = Self::unpack_u64(rest)?;
-                Self::WithdrawSingleTokenTypeExactAmountOut(WithdrawSingleTokenTypeExactAmountOut {
-                    destination_token_amount,
-                    maximum_pool_token_amount,
-                })
-            }
+            // 4 => {
+            //     let (source_token_amount, rest) = Self::unpack_u64(rest)?;
+            //     let (minimum_pool_token_amount, _rest) = Self::unpack_u64(rest)?;
+            //     Self::DepositSingleTokenTypeExactAmountIn(DepositSingleTokenTypeExactAmountIn {
+            //         source_token_amount,
+            //         minimum_pool_token_amount,
+            //     })
+            // }
+            // 5 => {
+            //     let (destination_token_amount, rest) = Self::unpack_u64(rest)?;
+            //     let (maximum_pool_token_amount, _rest) = Self::unpack_u64(rest)?;
+            //     Self::WithdrawSingleTokenTypeExactAmountOut(WithdrawSingleTokenTypeExactAmountOut {
+            //         destination_token_amount,
+            //         maximum_pool_token_amount,
+            //     })
+            // }
             _ => return Err(SwapError::InvalidInstruction.into()),
         })
     }
@@ -304,25 +274,24 @@ impl SwapInstruction {
                 buf.extend_from_slice(&pool_token_amount.to_le_bytes());
                 buf.extend_from_slice(&minimum_token_a_amount.to_le_bytes());
                 buf.extend_from_slice(&minimum_token_b_amount.to_le_bytes());
-            }
-            Self::DepositSingleTokenTypeExactAmountIn(DepositSingleTokenTypeExactAmountIn {
-                source_token_amount,
-                minimum_pool_token_amount,
-            }) => {
-                buf.push(4);
-                buf.extend_from_slice(&source_token_amount.to_le_bytes());
-                buf.extend_from_slice(&minimum_pool_token_amount.to_le_bytes());
-            }
-            Self::WithdrawSingleTokenTypeExactAmountOut(
-                WithdrawSingleTokenTypeExactAmountOut {
-                    destination_token_amount,
-                    maximum_pool_token_amount,
-                },
-            ) => {
-                buf.push(5);
-                buf.extend_from_slice(&destination_token_amount.to_le_bytes());
-                buf.extend_from_slice(&maximum_pool_token_amount.to_le_bytes());
-            }
+            } // Self::DepositSingleTokenTypeExactAmountIn(DepositSingleTokenTypeExactAmountIn {
+              //     source_token_amount,
+              //     minimum_pool_token_amount,
+              // }) => {
+              //     buf.push(4);
+              //     buf.extend_from_slice(&source_token_amount.to_le_bytes());
+              //     buf.extend_from_slice(&minimum_pool_token_amount.to_le_bytes());
+              // }
+              // Self::WithdrawSingleTokenTypeExactAmountOut(
+              //     WithdrawSingleTokenTypeExactAmountOut {
+              //         destination_token_amount,
+              //         maximum_pool_token_amount,
+              //     },
+              // ) => {
+              //     buf.push(5);
+              //     buf.extend_from_slice(&destination_token_amount.to_le_bytes());
+              //     buf.extend_from_slice(&maximum_pool_token_amount.to_le_bytes());
+              // }
         }
         buf
     }
@@ -439,77 +408,77 @@ pub fn withdraw_all_token_types(
     })
 }
 
-/// Creates a 'deposit_single_token_type_exact_amount_in' instruction.
-pub fn deposit_single_token_type_exact_amount_in(
-    program_id: &Pubkey,
-    token_program_id: &Pubkey,
-    swap_pubkey: &Pubkey,
-    authority_pubkey: &Pubkey,
-    user_transfer_authority_pubkey: &Pubkey,
-    source_token_pubkey: &Pubkey,
-    swap_token_a_pubkey: &Pubkey,
-    swap_token_b_pubkey: &Pubkey,
-    pool_mint_pubkey: &Pubkey,
-    destination_pubkey: &Pubkey,
-    instruction: DepositSingleTokenTypeExactAmountIn,
-) -> Result<Instruction, ProgramError> {
-    let data = SwapInstruction::DepositSingleTokenTypeExactAmountIn(instruction).pack();
+// /// Creates a 'deposit_single_token_type_exact_amount_in' instruction.
+// pub fn deposit_single_token_type_exact_amount_in(
+//     program_id: &Pubkey,
+//     token_program_id: &Pubkey,
+//     swap_pubkey: &Pubkey,
+//     authority_pubkey: &Pubkey,
+//     user_transfer_authority_pubkey: &Pubkey,
+//     source_token_pubkey: &Pubkey,
+//     swap_token_a_pubkey: &Pubkey,
+//     swap_token_b_pubkey: &Pubkey,
+//     pool_mint_pubkey: &Pubkey,
+//     destination_pubkey: &Pubkey,
+//     instruction: DepositSingleTokenTypeExactAmountIn,
+// ) -> Result<Instruction, ProgramError> {
+//     let data = SwapInstruction::DepositSingleTokenTypeExactAmountIn(instruction).pack();
 
-    let accounts = vec![
-        AccountMeta::new_readonly(*swap_pubkey, false),
-        AccountMeta::new_readonly(*authority_pubkey, false),
-        AccountMeta::new_readonly(*user_transfer_authority_pubkey, true),
-        AccountMeta::new(*source_token_pubkey, false),
-        AccountMeta::new(*swap_token_a_pubkey, false),
-        AccountMeta::new(*swap_token_b_pubkey, false),
-        AccountMeta::new(*pool_mint_pubkey, false),
-        AccountMeta::new(*destination_pubkey, false),
-        AccountMeta::new_readonly(*token_program_id, false),
-    ];
+//     let accounts = vec![
+//         AccountMeta::new_readonly(*swap_pubkey, false),
+//         AccountMeta::new_readonly(*authority_pubkey, false),
+//         AccountMeta::new_readonly(*user_transfer_authority_pubkey, true),
+//         AccountMeta::new(*source_token_pubkey, false),
+//         AccountMeta::new(*swap_token_a_pubkey, false),
+//         AccountMeta::new(*swap_token_b_pubkey, false),
+//         AccountMeta::new(*pool_mint_pubkey, false),
+//         AccountMeta::new(*destination_pubkey, false),
+//         AccountMeta::new_readonly(*token_program_id, false),
+//     ];
 
-    Ok(Instruction {
-        program_id: *program_id,
-        accounts,
-        data,
-    })
-}
+//     Ok(Instruction {
+//         program_id: *program_id,
+//         accounts,
+//         data,
+//     })
+// }
 
 /// Creates a 'withdraw_single_token_type_exact_amount_out' instruction.
-pub fn withdraw_single_token_type_exact_amount_out(
-    program_id: &Pubkey,
-    token_program_id: &Pubkey,
-    swap_pubkey: &Pubkey,
-    authority_pubkey: &Pubkey,
-    user_transfer_authority_pubkey: &Pubkey,
-    pool_mint_pubkey: &Pubkey,
-    fee_account_pubkey: &Pubkey,
-    pool_token_source_pubkey: &Pubkey,
-    swap_token_a_pubkey: &Pubkey,
-    swap_token_b_pubkey: &Pubkey,
-    destination_pubkey: &Pubkey,
-    instruction: WithdrawSingleTokenTypeExactAmountOut,
-) -> Result<Instruction, ProgramError> {
-    let data = SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(instruction).pack();
+// pub fn withdraw_single_token_type_exact_amount_out(
+//     program_id: &Pubkey,
+//     token_program_id: &Pubkey,
+//     swap_pubkey: &Pubkey,
+//     authority_pubkey: &Pubkey,
+//     user_transfer_authority_pubkey: &Pubkey,
+//     pool_mint_pubkey: &Pubkey,
+//     fee_account_pubkey: &Pubkey,
+//     pool_token_source_pubkey: &Pubkey,
+//     swap_token_a_pubkey: &Pubkey,
+//     swap_token_b_pubkey: &Pubkey,
+//     destination_pubkey: &Pubkey,
+//     instruction: WithdrawSingleTokenTypeExactAmountOut,
+// ) -> Result<Instruction, ProgramError> {
+//     let data = SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(instruction).pack();
 
-    let accounts = vec![
-        AccountMeta::new_readonly(*swap_pubkey, false),
-        AccountMeta::new_readonly(*authority_pubkey, false),
-        AccountMeta::new_readonly(*user_transfer_authority_pubkey, true),
-        AccountMeta::new(*pool_mint_pubkey, false),
-        AccountMeta::new(*pool_token_source_pubkey, false),
-        AccountMeta::new(*swap_token_a_pubkey, false),
-        AccountMeta::new(*swap_token_b_pubkey, false),
-        AccountMeta::new(*destination_pubkey, false),
-        AccountMeta::new(*fee_account_pubkey, false),
-        AccountMeta::new_readonly(*token_program_id, false),
-    ];
+//     let accounts = vec![
+//         AccountMeta::new_readonly(*swap_pubkey, false),
+//         AccountMeta::new_readonly(*authority_pubkey, false),
+//         AccountMeta::new_readonly(*user_transfer_authority_pubkey, true),
+//         AccountMeta::new(*pool_mint_pubkey, false),
+//         AccountMeta::new(*pool_token_source_pubkey, false),
+//         AccountMeta::new(*swap_token_a_pubkey, false),
+//         AccountMeta::new(*swap_token_b_pubkey, false),
+//         AccountMeta::new(*destination_pubkey, false),
+//         AccountMeta::new(*fee_account_pubkey, false),
+//         AccountMeta::new_readonly(*token_program_id, false),
+//     ];
 
-    Ok(Instruction {
-        program_id: *program_id,
-        accounts,
-        data,
-    })
-}
+//     Ok(Instruction {
+//         program_id: *program_id,
+//         accounts,
+//         data,
+//     })
+// }
 
 /// Creates a 'swap' instruction.
 pub fn swap(
@@ -672,41 +641,41 @@ mod tests {
         assert_eq!(unpacked, check);
     }
 
-    #[test]
-    fn pack_deposit_one_exact_in() {
-        let source_token_amount: u64 = 10;
-        let minimum_pool_token_amount: u64 = 5;
-        let check = SwapInstruction::DepositSingleTokenTypeExactAmountIn(
-            DepositSingleTokenTypeExactAmountIn {
-                source_token_amount,
-                minimum_pool_token_amount,
-            },
-        );
-        let packed = check.pack();
-        let mut expect = vec![4];
-        expect.extend_from_slice(&source_token_amount.to_le_bytes());
-        expect.extend_from_slice(&minimum_pool_token_amount.to_le_bytes());
-        assert_eq!(packed, expect);
-        let unpacked = SwapInstruction::unpack(&expect).unwrap();
-        assert_eq!(unpacked, check);
-    }
+    // #[test]
+    // fn pack_deposit_one_exact_in() {
+    //     let source_token_amount: u64 = 10;
+    //     let minimum_pool_token_amount: u64 = 5;
+    //     let check = SwapInstruction::DepositSingleTokenTypeExactAmountIn(
+    //         DepositSingleTokenTypeExactAmountIn {
+    //             source_token_amount,
+    //             minimum_pool_token_amount,
+    //         },
+    //     );
+    //     let packed = check.pack();
+    //     let mut expect = vec![4];
+    //     expect.extend_from_slice(&source_token_amount.to_le_bytes());
+    //     expect.extend_from_slice(&minimum_pool_token_amount.to_le_bytes());
+    //     assert_eq!(packed, expect);
+    //     let unpacked = SwapInstruction::unpack(&expect).unwrap();
+    //     assert_eq!(unpacked, check);
+    // }
 
-    #[test]
-    fn pack_withdraw_one_exact_out() {
-        let destination_token_amount: u64 = 102198761982612;
-        let maximum_pool_token_amount: u64 = 1212438012089;
-        let check = SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(
-            WithdrawSingleTokenTypeExactAmountOut {
-                destination_token_amount,
-                maximum_pool_token_amount,
-            },
-        );
-        let packed = check.pack();
-        let mut expect = vec![5];
-        expect.extend_from_slice(&destination_token_amount.to_le_bytes());
-        expect.extend_from_slice(&maximum_pool_token_amount.to_le_bytes());
-        assert_eq!(packed, expect);
-        let unpacked = SwapInstruction::unpack(&expect).unwrap();
-        assert_eq!(unpacked, check);
-    }
+    // #[test]
+    // fn pack_withdraw_one_exact_out() {
+    //     let destination_token_amount: u64 = 102198761982612;
+    //     let maximum_pool_token_amount: u64 = 1212438012089;
+    //     let check = SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(
+    //         WithdrawSingleTokenTypeExactAmountOut {
+    //             destination_token_amount,
+    //             maximum_pool_token_amount,
+    //         },
+    //     );
+    //     let packed = check.pack();
+    //     let mut expect = vec![5];
+    //     expect.extend_from_slice(&destination_token_amount.to_le_bytes());
+    //     expect.extend_from_slice(&maximum_pool_token_amount.to_le_bytes());
+    //     assert_eq!(packed, expect);
+    //     let unpacked = SwapInstruction::unpack(&expect).unwrap();
+    //     assert_eq!(unpacked, check);
+    // }
 }

@@ -8,9 +8,8 @@ use crate::{
         fees::Fees,
     },
     error::SwapError,
-    instruction::{
-        DepositAllTokenTypes, DepositSingleTokenTypeExactAmountIn, Initialize, Swap,
-        SwapInstruction, WithdrawAllTokenTypes, WithdrawSingleTokenTypeExactAmountOut,
+    instruction_nonanchor::{
+        DepositAllTokenTypes, Initialize, Swap, SwapInstruction, WithdrawAllTokenTypes,
     },
     state::{SwapState, SwapV1, SwapVersion},
 };
@@ -1032,35 +1031,34 @@ impl Processor {
                     minimum_token_b_amount,
                     accounts,
                 )
-            }
-            SwapInstruction::DepositSingleTokenTypeExactAmountIn(
-                DepositSingleTokenTypeExactAmountIn {
-                    source_token_amount,
-                    minimum_pool_token_amount,
-                },
-            ) => {
-                msg!("Instruction: DepositSingleTokenTypeExactAmountIn");
-                Self::process_deposit_single_token_type_exact_amount_in(
-                    program_id,
-                    source_token_amount,
-                    minimum_pool_token_amount,
-                    accounts,
-                )
-            }
-            SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(
-                WithdrawSingleTokenTypeExactAmountOut {
-                    destination_token_amount,
-                    maximum_pool_token_amount,
-                },
-            ) => {
-                msg!("Instruction: WithdrawSingleTokenTypeExactAmountOut");
-                Self::process_withdraw_single_token_type_exact_amount_out(
-                    program_id,
-                    destination_token_amount,
-                    maximum_pool_token_amount,
-                    accounts,
-                )
-            }
+            } // SwapInstruction::DepositSingleTokenTypeExactAmountIn(
+              //     DepositSingleTokenTypeExactAmountIn {
+              //         source_token_amount,
+              //         minimum_pool_token_amount,
+              //     },
+              // ) => {
+              //     msg!("Instruction: DepositSingleTokenTypeExactAmountIn");
+              //     Self::process_deposit_single_token_type_exact_amount_in(
+              //         program_id,
+              //         source_token_amount,
+              //         minimum_pool_token_amount,
+              //         accounts,
+              //     )
+              // }
+              // SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(
+              //     WithdrawSingleTokenTypeExactAmountOut {
+              //         destination_token_amount,
+              //         maximum_pool_token_amount,
+              //     },
+              // ) => {
+              //     msg!("Instruction: WithdrawSingleTokenTypeExactAmountOut");
+              //     Self::process_withdraw_single_token_type_exact_amount_out(
+              //         program_id,
+              //         destination_token_amount,
+              //         maximum_pool_token_amount,
+              //         accounts,
+              //     )
+              // }
         }
     }
 }
@@ -1140,7 +1138,7 @@ fn to_u128(val: u64) -> Result<u128, SwapError> {
 fn to_u64(val: u128) -> Result<u64, SwapError> {
     val.try_into().map_err(|_| SwapError::ConversionFailure)
 }
-
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6856,3 +6854,4 @@ mod tests {
             .unwrap();
     }
 }
+*/

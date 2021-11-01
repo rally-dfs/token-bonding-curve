@@ -26,6 +26,7 @@ spl-token = { version = "3.2", features = ["no-entrypoint"] }
 thiserror = "1.0"
 arbitrary = { version = "0.4", features = ["derive"], optional = true }
 roots = { version = "0.0.7", optional = true }
+anchor-lang = "0.18.0"
 
 [dev-dependencies]
 solana-sdk = "1.8.0"

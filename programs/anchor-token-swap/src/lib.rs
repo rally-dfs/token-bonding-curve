@@ -7,7 +7,6 @@ mod instructions;
 pub mod constraints;
 pub mod curve;
 pub mod error;
-pub mod instruction_nonanchor;
 pub mod processor;
 pub mod state;
 
@@ -21,7 +20,27 @@ declare_id!("SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8");
 mod anchor_token_swap {
     use super::*;
 
-    /// Creates a 'withdraw_all_token_types' instruction.w
+    /// Creates a 'swap' instruction.
+    pub fn swap(ctx: Context<Swap>, amount_in: u64, minimum_amount_out: u64) -> ProgramResult {
+        instructions::swap::handler(ctx, amount_in, minimum_amount_out)
+    }
+
+    /// Creates a 'deposit_all_token_types' instruction.
+    pub fn deposit_all_token_types(
+        ctx: Context<DepositAllTokenTypes>,
+        pool_token_amount: u64,
+        maximum_token_a_amount: u64,
+        maximum_token_b_amount: u64,
+    ) -> ProgramResult {
+        instructions::deposit_all_token_types::handler(
+            ctx,
+            pool_token_amount,
+            maximum_token_a_amount,
+            maximum_token_b_amount,
+        )
+    }
+
+    /// Creates a 'withdraw_all_token_types' instruction.
     pub fn withdraw_all_token_types(
         ctx: Context<WithdrawAllTokenTypes>,
         pool_token_amount: u64,

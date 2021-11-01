@@ -10,9 +10,6 @@ pub struct WithdrawAllTokenTypes<'info> {
     pub swap_authority: AccountInfo<'info>,
     ///   2. `[]` user transfer authority
     pub user_transfer_authority: AccountInfo<'info>,
-    ///   3. `[writable]` token_(A|B) SOURCE Account, amount is transferable by user transfer authority,
-    #[account(mut)]
-    pub source_token: AccountInfo<'info>,
     ///   3. `[writable]` Pool mint account, swap authority is the owner
     #[account(mut)]
     pub pool_mint: AccountInfo<'info>,

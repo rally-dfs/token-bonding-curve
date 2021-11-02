@@ -10,6 +10,7 @@ pub mod error;
 pub mod processor;
 pub mod state;
 
+use curve::fees::Fees;
 use instructions::*;
 
 // solana_program::declare_id!("SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8");
@@ -19,6 +20,24 @@ declare_id!("SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8");
 #[program]
 mod anchor_token_swap {
     use super::*;
+
+    ///   Creates an 'initialize' instruction with ConstantPrice curve
+    ///   Note that SwapCurve has a dynamic trait so can't be borsh serialized easily, so we just handles
+    ///   creating the SwapCurve based on the primitives passed into the different instructions
+    pub fn initialize_constant_price(
+        ctx: Context<Initialize>,
+        fees: Fees,
+        token_b_price: u64,
+    ) -> ProgramResult {
+        instructions::initialize::handler(
+            ctx,
+            fees,
+            curve::base::SwapCurve {
+                curve_type: curve::base::CurveType::ConstantPrice,
+                calculator: Box::new(curve::constant_price::ConstantPriceCurve { token_b_price }),
+            },
+        )
+    }
 
     /// Creates a 'swap' instruction.
     pub fn swap(ctx: Context<Swap>, amount_in: u64, minimum_amount_out: u64) -> ProgramResult {

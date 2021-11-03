@@ -9,6 +9,7 @@ pub struct Swap<'info> {
     ///   1. `[]` swap authority
     pub swap_authority: AccountInfo<'info>,
     ///   2. `[]` user transfer authority
+    #[account(signer)]
     pub user_transfer_authority: AccountInfo<'info>,
     ///   3. `[writable]` token_(A|B) SOURCE Account, amount is transferable by user transfer authority,
     #[account(mut)]
@@ -30,6 +31,7 @@ pub struct Swap<'info> {
     pub pool_fee: AccountInfo<'info>,
     ///   9. '[]` Token program id
     pub token_program: AccountInfo<'info>,
+    // TODO:     ///   10 `[optional, writable]` Host fee account to receive additional trading fees
 }
 
 ///   Swap the tokens in the pool.

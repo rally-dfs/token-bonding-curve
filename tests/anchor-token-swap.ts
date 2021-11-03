@@ -1,4 +1,5 @@
 import * as anchor from '@project-serum/anchor';
+import assert from "assert";
 import { PublicKey } from '@solana/web3.js';
 import { AccountLayout, MintLayout, Token, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
@@ -125,7 +126,7 @@ describe('anchor-token-swap', () => {
   const provider = anchor.Provider.env();
   anchor.setProvider(provider);
 
-  it('Is initialized!', async () => {
+  it('should perform constant price swap!', async () => {
 
     const program = anchor.workspace.AnchorTokenSwap;
 
@@ -146,10 +147,13 @@ describe('anchor-token-swap', () => {
 
     ///   2. `[]` token_a Account. Must be non zero, owned by swap authority.
     ///   3. `[]` token_b Account. Must be non zero, owned by swap authority.
-    const aTokenAccount = await generateTokenAccount(provider, aTokenMint, swapAuthority);
-    await mintToAccount(provider, aTokenMintAuthority, aTokenMint, aTokenAccount.publicKey, 1000);
-    const bTokenAccount = await generateTokenAccount(provider, bTokenMint, swapAuthority);
-    await mintToAccount(provider, bTokenMintAuthority, bTokenMint, bTokenAccount.publicKey, 2000);
+    const aTokenSwapAccount = await generateTokenAccount(provider, aTokenMint, swapAuthority);
+    await mintToAccount(provider, aTokenMintAuthority, aTokenMint, aTokenSwapAccount.publicKey, 1000 * 10 ** 8);
+    const bTokenSwapAccount = await generateTokenAccount(provider, bTokenMint, swapAuthority);
+    await mintToAccount(provider, bTokenMintAuthority, bTokenMint, bTokenSwapAccount.publicKey, 2000 * 10 ** 8);
+
+    let aToken = new Token(provider.connection, aTokenMint.publicKey, TOKEN_PROGRAM_ID, aTokenMintAuthority);
+    let bToken = new Token(provider.connection, bTokenMint.publicKey, TOKEN_PROGRAM_ID, bTokenMintAuthority);
 
     ///   4. `[writable]` Pool Token Mint. Must be empty, owned by swap authority.
     const poolMint = await generateTokenMint(provider, swapAuthority);
@@ -164,13 +168,13 @@ describe('anchor-token-swap', () => {
     const destinationAuthority = await generateNewSignerAccount(provider);
     const destinationTokenAccount = await generateTokenAccount(provider, poolMint, destinationAuthority.publicKey);
 
-    let trade_fee_numerator = new anchor.BN(1);
-    let trade_fee_denominator = new anchor.BN(4);
-    let owner_trade_fee_numerator = new anchor.BN(2);
-    let owner_trade_fee_denominator = new anchor.BN(5);
-    let owner_withdraw_fee_numerator = new anchor.BN(4);
-    let owner_withdraw_fee_denominator = new anchor.BN(10);
-    let host_fee_numerator = new anchor.BN(7);
+    let trade_fee_numerator = new anchor.BN(2);
+    let trade_fee_denominator = new anchor.BN(100);
+    let owner_trade_fee_numerator = new anchor.BN(3);
+    let owner_trade_fee_denominator = new anchor.BN(100);
+    let owner_withdraw_fee_numerator = new anchor.BN(7);
+    let owner_withdraw_fee_denominator = new anchor.BN(100);
+    let host_fee_numerator = new anchor.BN(11);
     let host_fee_denominator = new anchor.BN(100);
 
     let fees = {
@@ -211,8 +215,8 @@ describe('anchor-token-swap', () => {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
           swapAuthority: swapAuthority,
-          tokenA: aTokenAccount.publicKey,
-          tokenB: bTokenAccount.publicKey,
+          tokenA: aTokenSwapAccount.publicKey,
+          tokenB: bTokenSwapAccount.publicKey,
           pool: poolMint.publicKey,
           fee: feeTokenAccount.publicKey,
           destination: destinationTokenAccount.publicKey,
@@ -220,6 +224,70 @@ describe('anchor-token-swap', () => {
         },
         signers: [tokenSwap],
       });
+
     console.log("Your transaction signature", tx);
+
+    // TODO: add some asserts here
+
+    const swapUser = await generateNewSignerAccount(provider);
+
+    const aTokenUserAccount = await generateTokenAccount(provider, aTokenMint, swapUser.publicKey);
+    await mintToAccount(provider, aTokenMintAuthority, aTokenMint, aTokenUserAccount.publicKey, 30 * 10 ** 8);
+    const bTokenUserAccount = await generateTokenAccount(provider, bTokenMint, swapUser.publicKey);
+    await mintToAccount(provider, bTokenMintAuthority, bTokenMint, bTokenUserAccount.publicKey, 200 * 10 ** 8);
+
+    let amount_in = new anchor.BN(20 * 10 ** 8);
+    let minimum_amount_out = new anchor.BN(0);
+
+    console.log(`tokenSwap.publicKey ${tokenSwap.publicKey}`);
+    console.log(`swapAuthority ${swapAuthority}`);
+    console.log(`swapUser.publicKey ${swapUser.publicKey}`);
+    console.log(`aTokenSwapUserAccount.publicKey ${aTokenUserAccount.publicKey}`);
+    console.log(`aTokenAccount.publicKey ${aTokenSwapAccount.publicKey}`);
+    console.log(`bTokenAccount.publicKey ${bTokenSwapAccount.publicKey}`);
+    console.log(`bTokenSwapUserAccount.publicKey ${bTokenUserAccount.publicKey}`);
+    console.log(`poolMint.publicKey ${poolMint.publicKey}`);
+    console.log(`feeTokenAccount.publicKey ${feeTokenAccount.publicKey}`);
+    console.log(`TOKEN_PROGRAM_PUBKEY ${TOKEN_PROGRAM_PUBKEY}`);
+
+    const swapTx = await program.rpc.swap(
+      amount_in,
+      minimum_amount_out,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          userTransferAuthority: swapUser.publicKey,
+          source: aTokenUserAccount.publicKey,
+          swapSource: aTokenSwapAccount.publicKey,
+          swapDestination: bTokenSwapAccount.publicKey,
+          destination: bTokenUserAccount.publicKey,
+          poolMint: poolMint.publicKey,
+          poolFee: feeTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [swapUser]
+      },
+    )
+
+    console.log("Your transaction signature", swapTx);
+
+    // user swaps 20 token A, balance 30 -> 10
+    assert.strictEqual(
+      (await aToken.getAccountInfo(aTokenUserAccount.publicKey)).amount.toString(),
+      "10.00000000".replace(".", ""));
+    // swap's A balance goes from 1000 -> 1020
+    assert.strictEqual(
+      (await aToken.getAccountInfo(aTokenSwapAccount.publicKey)).amount.toString(),
+      "1020.00000000".replace(".", ""));
+    // user gets 20/5 B tokens back, minus fees 200 -> 203.8
+    // TODO: just got +3.8 by running the program, should probably verify the fee math
+    assert.strictEqual(
+      (await bToken.getAccountInfo(bTokenUserAccount.publicKey)).amount.toString(),
+      "203.80000000".replace(".", ""));
+    // swap's B balance goes from 2000 -> 1996.2
+    assert.strictEqual(
+      (await bToken.getAccountInfo(bTokenSwapAccount.publicKey)).amount.toString(),
+      "1996.20000000".replace(".", ""));
   });
 });

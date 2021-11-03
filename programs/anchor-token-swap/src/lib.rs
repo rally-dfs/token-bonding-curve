@@ -26,12 +26,29 @@ mod anchor_token_swap {
     ///   creating the SwapCurve based on the primitives passed into the different instructions
     pub fn initialize_constant_price(
         ctx: Context<Initialize>,
-        fees: Fees,
+        // TODO: should be able to just accept Fees in here instead of all these but wasn't working, not sure why
+        trade_fee_numerator: u64,
+        trade_fee_denominator: u64,
+        owner_trade_fee_numerator: u64,
+        owner_trade_fee_denominator: u64,
+        owner_withdraw_fee_numerator: u64,
+        owner_withdraw_fee_denominator: u64,
+        host_fee_numerator: u64,
+        host_fee_denominator: u64,
         token_b_price: u64,
     ) -> ProgramResult {
         instructions::initialize::handler(
             ctx,
-            fees,
+            Fees {
+                trade_fee_numerator,
+                trade_fee_denominator,
+                owner_trade_fee_numerator,
+                owner_trade_fee_denominator,
+                owner_withdraw_fee_numerator,
+                owner_withdraw_fee_denominator,
+                host_fee_numerator,
+                host_fee_denominator,
+            },
             curve::base::SwapCurve {
                 curve_type: curve::base::CurveType::ConstantPrice,
                 calculator: Box::new(curve::constant_price::ConstantPriceCurve { token_b_price }),

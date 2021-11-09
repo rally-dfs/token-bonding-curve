@@ -156,17 +156,19 @@ describe('anchor-token-swap', () => {
     let bToken = new Token(provider.connection, bTokenMint.publicKey, TOKEN_PROGRAM_ID, bTokenMintAuthority);
 
     ///   4. `[writable]` Pool Token Mint. Must be empty, owned by swap authority.
-    const poolMint = await generateTokenMint(provider, swapAuthority);
+    const poolTokenMint = await generateTokenMint(provider, swapAuthority);
+
+    let poolToken = new Token(provider.connection, poolTokenMint.publicKey, TOKEN_PROGRAM_ID, tokenSwap);
 
     ///   5. `[]` Pool Token Account to deposit trading and withdraw fees.
     ///   Must be empty, not owned by swap authority
     const feeAuthority = await generateNewSignerAccount(provider);
-    const feeTokenAccount = await generateTokenAccount(provider, poolMint, feeAuthority.publicKey);
+    const feeTokenAccount = await generateTokenAccount(provider, poolTokenMint, feeAuthority.publicKey);
 
     ///   6. `[writable]` Pool Token Account to deposit the initial pool token
     ///   supply.  Must be empty, not owned by swap authority.
     const destinationAuthority = await generateNewSignerAccount(provider);
-    const destinationTokenAccount = await generateTokenAccount(provider, poolMint, destinationAuthority.publicKey);
+    const destinationTokenAccount = await generateTokenAccount(provider, poolTokenMint, destinationAuthority.publicKey);
 
     let trade_fee_numerator = new anchor.BN(2);
     let trade_fee_denominator = new anchor.BN(100);
@@ -190,16 +192,6 @@ describe('anchor-token-swap', () => {
 
     let token_b_price = new anchor.BN(5);
 
-    console.log(`tokenSwap.publicKey ${tokenSwap.publicKey}`);
-    console.log(`swapAuthority ${swapAuthority}`);
-    console.log(`aTokenMint.publicKey ${aTokenMint.publicKey}`);
-    console.log(`bTokenMint.publicKey ${bTokenMint.publicKey}`);
-    console.log(`poolMint.publicKey ${poolMint.publicKey}`);
-    console.log(`feeTokenAccount.publicKey ${feeTokenAccount.publicKey}`);
-    console.log(`destinationTokenAccount.publicKey ${destinationTokenAccount.publicKey}`);
-    console.log(`TOKEN_PROGRAM_PUBKEY ${TOKEN_PROGRAM_PUBKEY}`);
-    console.log(`fees ${JSON.stringify(fees)}`);
-
     const tx = await program.rpc.initializeConstantPrice(
       // TODO: not sure why passing fees in here doesn't work, need to look into it
       trade_fee_numerator,
@@ -217,7 +209,7 @@ describe('anchor-token-swap', () => {
           swapAuthority: swapAuthority,
           tokenA: aTokenSwapAccount.publicKey,
           tokenB: bTokenSwapAccount.publicKey,
-          pool: poolMint.publicKey,
+          pool: poolTokenMint.publicKey,
           fee: feeTokenAccount.publicKey,
           destination: destinationTokenAccount.publicKey,
           tokenProgram: TOKEN_PROGRAM_PUBKEY,
@@ -227,7 +219,14 @@ describe('anchor-token-swap', () => {
 
     console.log("Your transaction signature", tx);
 
-    // TODO: add some asserts here
+    // fee token account starts at 0
+    assert.strictEqual(
+      (await poolToken.getAccountInfo(feeTokenAccount.publicKey)).amount.toString(),
+      "0.00000000".replace(".", ""));
+    // destination token starts at 10 (see CurveCalculator::INITIAL_SWAP_POOL_AMOUNT)
+    assert.strictEqual(
+      (await poolToken.getAccountInfo(destinationTokenAccount.publicKey)).amount.toString(),
+      "10.00000000".replace(".", ""));
 
     const swapUser = await generateNewSignerAccount(provider);
 
@@ -238,17 +237,6 @@ describe('anchor-token-swap', () => {
 
     let amount_in = new anchor.BN(20 * 10 ** 8);
     let minimum_amount_out = new anchor.BN(0);
-
-    console.log(`tokenSwap.publicKey ${tokenSwap.publicKey}`);
-    console.log(`swapAuthority ${swapAuthority}`);
-    console.log(`swapUser.publicKey ${swapUser.publicKey}`);
-    console.log(`aTokenSwapUserAccount.publicKey ${aTokenUserAccount.publicKey}`);
-    console.log(`aTokenAccount.publicKey ${aTokenSwapAccount.publicKey}`);
-    console.log(`bTokenAccount.publicKey ${bTokenSwapAccount.publicKey}`);
-    console.log(`bTokenSwapUserAccount.publicKey ${bTokenUserAccount.publicKey}`);
-    console.log(`poolMint.publicKey ${poolMint.publicKey}`);
-    console.log(`feeTokenAccount.publicKey ${feeTokenAccount.publicKey}`);
-    console.log(`TOKEN_PROGRAM_PUBKEY ${TOKEN_PROGRAM_PUBKEY}`);
 
     const swapTx = await program.rpc.swap(
       amount_in,
@@ -262,7 +250,7 @@ describe('anchor-token-swap', () => {
           swapSource: aTokenSwapAccount.publicKey,
           swapDestination: bTokenSwapAccount.publicKey,
           destination: bTokenUserAccount.publicKey,
-          poolMint: poolMint.publicKey,
+          poolTokenMint: poolTokenMint.publicKey,
           poolFee: feeTokenAccount.publicKey,
           tokenProgram: TOKEN_PROGRAM_PUBKEY,
         },

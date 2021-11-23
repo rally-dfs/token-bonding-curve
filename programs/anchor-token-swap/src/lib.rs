@@ -56,6 +56,49 @@ mod anchor_token_swap {
         )
     }
 
+    ///   Creates an 'initialize' instruction with LinearPrice curve
+    ///   Note that SwapCurve has a dynamic trait so can't be borsh serialized easily, so we just handles
+    ///   creating the SwapCurve based on the primitives passed into the different instructions
+    pub fn initialize_linear_price(
+        ctx: Context<Initialize>,
+        // TODO: should be able to just accept Fees in here instead of all these but wasn't working, not sure why
+        trade_fee_numerator: u64,
+        trade_fee_denominator: u64,
+        owner_trade_fee_numerator: u64,
+        owner_trade_fee_denominator: u64,
+        owner_withdraw_fee_numerator: u64,
+        owner_withdraw_fee_denominator: u64,
+        host_fee_numerator: u64,
+        host_fee_denominator: u64,
+        slope_numerator: u64,
+        slope_denominator: u64,
+        initial_token_a_price: u64,
+        initial_token_b_price: u64,
+    ) -> ProgramResult {
+        instructions::initialize::handler(
+            ctx,
+            Fees {
+                trade_fee_numerator,
+                trade_fee_denominator,
+                owner_trade_fee_numerator,
+                owner_trade_fee_denominator,
+                owner_withdraw_fee_numerator,
+                owner_withdraw_fee_denominator,
+                host_fee_numerator,
+                host_fee_denominator,
+            },
+            curve::base::SwapCurve {
+                curve_type: curve::base::CurveType::LinearPrice,
+                calculator: Box::new(curve::linear_price::LinearPriceCurve {
+                    slope_numerator,
+                    slope_denominator,
+                    initial_token_r_price: initial_token_a_price,
+                    initial_token_c_price: initial_token_b_price,
+                }),
+            },
+        )
+    }
+
     /// Creates a 'swap' instruction.
     pub fn swap(ctx: Context<Swap>, amount_in: u64, minimum_amount_out: u64) -> ProgramResult {
         instructions::swap::handler(ctx, amount_in, minimum_amount_out)

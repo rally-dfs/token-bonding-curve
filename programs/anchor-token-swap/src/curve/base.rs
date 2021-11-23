@@ -10,6 +10,7 @@ use crate::curve::{
     constant_price::ConstantPriceCurve,
     constant_product::ConstantProductCurve,
     fees::Fees,
+    linear_price::LinearPriceCurve,
     offset::OffsetCurve,
     stable::StableCurve,
 };
@@ -33,6 +34,10 @@ pub enum CurveType {
     Stable,
     /// Offset curve, like Uniswap, but the token B side has a faked offset
     Offset,
+    /// Price of token B increases linearly as more token A is swapped in
+    /// (Make this explicit and leave some room just in case other curves get added in that we
+    /// want to incorporate)
+    LinearPrice = 30,
 }
 
 /// Encodes all results of swapping from a source token to a destination token
@@ -223,6 +228,9 @@ impl Pack for SwapCurve {
                 }
                 CurveType::Stable => Box::new(StableCurve::unpack_from_slice(calculator)?),
                 CurveType::Offset => Box::new(OffsetCurve::unpack_from_slice(calculator)?),
+                CurveType::LinearPrice => {
+                    Box::new(LinearPriceCurve::unpack_from_slice(calculator)?)
+                }
             },
         })
     }
@@ -253,6 +261,7 @@ impl TryFrom<u8> for CurveType {
             1 => Ok(CurveType::ConstantPrice),
             2 => Ok(CurveType::Stable),
             3 => Ok(CurveType::Offset),
+            30 => Ok(CurveType::LinearPrice),
             _ => Err(ProgramError::InvalidAccountData),
         }
     }

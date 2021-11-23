@@ -34,7 +34,7 @@ pub struct Initialize<'info> {
 }
 
 ///   Initializes a new swap
-///   Note that SwapCurve has a dynamic trait so can't be borsh serialized easily, so mod.rs just handles
+///   Note that SwapCurve has a dynamic trait so can't be borsh serialized easily, so lib.rs just handles
 ///   creating the SwapCurve based on the primitives passed into the different instructions
 pub fn handler(ctx: Context<Initialize>, fees: Fees, swap_curve: SwapCurve) -> ProgramResult {
     let accounts = [

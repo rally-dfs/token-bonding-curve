@@ -5,5 +5,6 @@ pub mod calculator;
 pub mod constant_price;
 pub mod constant_product;
 pub mod fees;
+pub mod linear_price;
 pub mod offset;
 pub mod stable;

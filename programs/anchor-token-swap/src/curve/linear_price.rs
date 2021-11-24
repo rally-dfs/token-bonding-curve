@@ -1,4 +1,9 @@
 //! Linear price swap curve, slope and initial price point set at init
+//! Currently this (especially `swap`) only works under the following assumptions:
+//! Deposits (except the initial deposit) are disabled
+//! The initial deposit should only have token B (the bonded token) and 0 token A (the collateral token)
+//! Withdrawals are disabled (maybe we can add in a check to enable it in emergencies?), TODO: this isn't implemented yet though
+
 use {
     crate::{
         curve::calculator::{
@@ -12,7 +17,7 @@ use {
         program_error::ProgramError,
         program_pack::{IsInitialized, Pack, Sealed},
     },
-    spl_math::{checked_ceil_div::CheckedCeilDiv, precise_number::PreciseNumber, uint::U256},
+    spl_math::precise_number::PreciseNumber,
 };
 
 /// LinearPriceCurve struct implementing CurveCalculator
@@ -32,8 +37,164 @@ pub struct LinearPriceCurve {
     pub initial_token_c_price: u64, // AKA token B
 }
 
+/// Babylonian sqrt method
+/// this takes ~50K compute vs PreciseNumber::sqrt which takes ~100K
+fn sqrt_babylonian(x: u128) -> Option<u128> {
+    let mut z = x.checked_add(1)?.checked_div(2)?;
+    let mut y = x;
+    while z < y {
+        y = z;
+        z = x.checked_div(z)?.checked_add(z)?.checked_div(2)?;
+    }
+    Some(y)
+}
+
+/// Returns the positive root of x given 0 = a*x^2 + bx + c
+/// a is assumed to always be positive
+fn solve_quadratic_positive_root(
+    a: &PreciseNumber,
+    b_abs_value: &PreciseNumber,
+    b_is_negative: bool,
+    c_abs_value: &PreciseNumber,
+    c_is_negative: bool,
+) -> Option<PreciseNumber> {
+    // TODO: should write some tests for this
+
+    // solve x = (-b + sqrt(b^2 - 4ac)) / 2a
+
+    // a * 4 * c
+    let four_a_c_abs_value = a
+        .checked_mul(&(PreciseNumber::new(4)?))?
+        .checked_mul(c_abs_value)?;
+
+    // b^2 - four_a_c
+    let b_squared = b_abs_value.checked_mul(b_abs_value)?;
+    let b2_minus_4ac = match c_is_negative {
+        // b^2 - (-|4ac|)
+        true => b_squared.checked_add(&four_a_c_abs_value)?,
+        // b^2 - (+|4ac|)
+        false => b_squared.checked_sub(&four_a_c_abs_value)?, // we're going to sqrt this so no need for unsigned_sub
+    };
+
+    // note we have to use u128 sqrt since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
+    let b2_minus_4ac_u128 = b2_minus_4ac.to_imprecise()?;
+    let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
+    let sqrt_b2_minus_4ac = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
+
+    // 2 * a
+    let two_a = a.checked_mul(&(PreciseNumber::new(2)?))?;
+
+    // numerator is sqrt(b^2-4ac) - b
+    let numerator = match b_is_negative {
+        true => {
+            // sqrt_b2_minus_4ac - (-|b|)
+            sqrt_b2_minus_4ac.checked_add(b_abs_value)?
+        }
+        false => {
+            // sqrt_b2_minus_4ac - |b|
+            // this needs to always be positive for our return value to be positive, so use checked_sub
+            sqrt_b2_minus_4ac.checked_sub(b_abs_value)?
+        }
+    };
+
+    // finally we return (sqrt(b^2-4ac) - b)/2a
+    numerator.checked_div(&two_a)
+}
+
+/// Some helper functions used in `impl CurveCalculator` for readability
+impl LinearPriceCurve {
+    /// Returns the positive root for token_r_amount = 0.5m*c^2 + (r0 - m*c0)*c + i
+    /// token_r_amount is assumed to always be >= 0 (i.e. no negative amounts of collateral token allowed)
+    /// i is the integration constant such that 0 collateral token is locked at c0
+    fn c_price_with_amt_r_locked(&self, token_r_amount: &PreciseNumber) -> Option<PreciseNumber> {
+        // TODO: should write some tests for this
+
+        let slope_numerator = PreciseNumber::new(self.slope_numerator.into())?;
+        let slope_denominator = PreciseNumber::new(self.slope_denominator.into())?;
+        let m = slope_numerator.checked_div(&slope_denominator)?;
+        let r0 = PreciseNumber::new(self.initial_token_r_price.into())?;
+        let c0 = PreciseNumber::new(self.initial_token_c_price.into())?;
+
+        // a == 0.5m
+        let a = m.checked_div(&(PreciseNumber::new(2)?))?;
+        // TODO: rewrite everything using foo_is_positive instead of foo_is_negative, probably way easier to read
+        // b == r0 - m*c0 (need to use unsigned_sub here to handle negatives)
+        let (b_abs_value, b_is_negative) = r0.unsigned_sub(&(m.checked_mul(&c0)?));
+
+        // calculate integration constant i0 when 0 collateral token is locked at c0,
+        // i.e. 0 = a*c0^2 + b*c0 + i
+        let (i0_abs_value, i0_is_negative);
+        if b_is_negative {
+            // since a is always positive, it's a little cleaner to solve for -i = a*c0^2 + b*c0
+            // instead of working with all the negatives with PreciseNumber
+            let negative_i0_info = a
+                .checked_mul(&c0)?
+                .checked_mul(&c0)?
+                .unsigned_sub(&(b_abs_value.checked_mul(&c0)?));
+            i0_abs_value = negative_i0_info.0; // abs value doesn't change from -i to i
+            i0_is_negative = !negative_i0_info.1; // i_is_negative is opposite of whether negative_i is negative
+        } else {
+            // a and b are both positive so i is always negative
+            i0_abs_value = a
+                .checked_mul(&c0)?
+                .checked_mul(&c0)?
+                .checked_add(&(b_abs_value.checked_mul(&c0)?))?;
+            i0_is_negative = true;
+        }
+
+        // finally, solve token_r_amount = a*c^2 + b*c + i0
+        // i.e. 0 = a*c^2 + b*c + (i0-token_r_amount)
+        let (i_abs_value, i_is_negative);
+        if i0_is_negative {
+            // both i0 and (-token_r_amount) are negative - can just add the two amounts and keep the sign negative
+            i_abs_value = i0_abs_value.checked_add(token_r_amount)?;
+            i_is_negative = i0_is_negative;
+        } else {
+            // otherwise, we have to do signed subtraction to solve (i0 - token_r_amount)
+            let i_info = i0_abs_value.unsigned_sub(token_r_amount);
+            i_abs_value = i_info.0;
+            i_is_negative = i_info.1;
+        }
+
+        solve_quadratic_positive_root(&a, &b_abs_value, b_is_negative, &i_abs_value, i_is_negative)
+    }
+
+    fn swap_a_to_b(
+        &self,
+        source_amount: u128,
+        swap_source_amount: u128,
+        _swap_destination_amount: u128,
+    ) -> Option<(u128, u128)> {
+        // use swap_source_amount (collateral token) to determine where we are on the integration curve
+        // note this only works if non-init deposits are disabled (and maybe if the initial deposit didn't have any token A in it?),
+        // otherwise there could be some A token in the pool that isn't part of the bonding curve
+
+        let r_start = PreciseNumber::new(swap_source_amount)?;
+        let r_end = r_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
+
+        // TODO: two sqrt calls is pretty expensive (50K each), we could potentially optimize this by storing the initial deposit amount on chain and inferring c_start from that?
+        // e.g c_start = initial_deposit_amount - swap_destination_amount (obviously only works if we disallow non-init deposits, and requires a lot of threading)
+        let c_start = self.c_price_with_amt_r_locked(&r_start)?;
+        let c_end = self.c_price_with_amt_r_locked(&r_end)?;
+        let destination_amount = c_end.checked_sub(&c_start)?.to_imprecise()?;
+
+        // TODO: need to handle rounding up/down, especially if not all the source_amount will be used (i.e. there's not enough swap_destination_amount)
+
+
+        Some((source_amount, destination_amount))
+    }
+
+    fn swap_b_to_a(
+        &self,
+        _source_amount: u128,
+        _swap_source_amount: u128,
+        _swap_destination_amount: u128,
+    ) -> Option<(u128, u128)> {
+        Some((0, 0))
+    }
+}
+
 impl CurveCalculator for LinearPriceCurve {
-    /// TODO:
     /// Calculate how much destination token will be provided given an amount
     /// of source token.
     fn swap_without_fees(
@@ -43,33 +204,20 @@ impl CurveCalculator for LinearPriceCurve {
         swap_destination_amount: u128,
         trade_direction: TradeDirection,
     ) -> Option<SwapWithoutFeesResult> {
-        None
-        // TODO: this is constant curve impl:
-        // let token_c_price = self.token_c_price as u128;
-
-        // let (source_amount_swapped, destination_amount_swapped) = match trade_direction {
-        //     TradeDirection::BtoA => (source_amount, source_amount.checked_mul(token_c_price)?),
-        //     TradeDirection::AtoB => {
-        //         let destination_amount_swapped = source_amount.checked_div(token_c_price)?;
-        //         let mut source_amount_swapped = source_amount;
-
-        //         // if there is a remainder from buying token B, floor
-        //         // token_r_amount to avoid taking too many tokens, but
-        //         // don't recalculate the fees
-        //         let remainder = source_amount_swapped.checked_rem(token_c_price)?;
-        //         if remainder > 0 {
-        //             source_amount_swapped = source_amount.checked_sub(remainder)?;
-        //         }
-
-        //         (source_amount_swapped, destination_amount_swapped)
-        //     }
-        // };
-        // let source_amount_swapped = map_zero_to_none(source_amount_swapped)?;
-        // let destination_amount_swapped = map_zero_to_none(destination_amount_swapped)?;
-        // Some(SwapWithoutFeesResult {
-        //     source_amount_swapped,
-        //     destination_amount_swapped,
-        // })
+        let (source_amount_swapped, destination_amount_swapped) = match trade_direction {
+            TradeDirection::AtoB => {
+                self.swap_a_to_b(source_amount, swap_source_amount, swap_destination_amount)?
+            }
+            TradeDirection::BtoA => {
+                self.swap_b_to_a(source_amount, swap_source_amount, swap_destination_amount)?
+            }
+        };
+        let source_amount_swapped = map_zero_to_none(source_amount_swapped)?;
+        let destination_amount_swapped = map_zero_to_none(destination_amount_swapped)?;
+        Some(SwapWithoutFeesResult {
+            source_amount_swapped,
+            destination_amount_swapped,
+        })
     }
 
     /// Get the amount of trading tokens for the given amount of pool tokens,
@@ -264,6 +412,72 @@ impl DynPack for LinearPriceCurve {
         *initial_token_r_price = self.initial_token_r_price.to_le_bytes();
         let initial_token_c_price = array_mut_ref![output, 24, 8];
         *initial_token_c_price = self.initial_token_c_price.to_le_bytes();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swap_basic() {
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 2,
+            initial_token_r_price: 50,
+            initial_token_c_price: 300,
+        };
+
+        // put in 101 RLY, should get 2 CC out
+        let (source_amount, destination_amount) = curve.swap_a_to_b(101, 0, 5000).unwrap();
+        assert_eq!(source_amount, 101);
+        assert_eq!(destination_amount, 2);
+
+        // put in 103 RLY, should get 2 more CC out
+        let (source_amount, destination_amount) = curve.swap_a_to_b(103, 101, 4998).unwrap();
+        assert_eq!(source_amount, 103);
+        assert_eq!(destination_amount, 2);
+
+        // same as above but assuming they both have 8 decimals
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 2_0000_0000, // slope needs to be scaled down to take into account C having 8 decimals
+            initial_token_r_price: 50, // since they both have 8 decimals, no need to scale this (it's still 50 base RLY for 1 base CC)
+            initial_token_c_price: 300_0000_0000,
+        };
+
+        let (source_amount, destination_amount) =
+            curve.swap_a_to_b(101_0000_0000, 0, 5000).unwrap();
+        assert_eq!(source_amount, 101_0000_0000);
+        assert_eq!(destination_amount, 2_0000_0000);
+
+        // similar to 145K segment of forte curve, but assume r has 18 decimals (this just lets us cram more precision into
+        // the calculation, as long as we interpret it correctly back out at the end)
+        // since r has 12 more decimals of precision than c, scale both slope and initial_token_r_price by 1e12
+        let curve = LinearPriceCurve {
+            slope_numerator: 5689_549_999_968_874, // 5.689549999968874e-9 in forte, so should be 5.689549999968874e3 now
+            slope_denominator: 1_000_000_000_000,
+            initial_token_r_price: 35_915742_315103, // 35.9157423151027 in forte, so should be 3.59...e13 now
+            initial_token_c_price: 145000_000000,
+        };
+
+        // putting in 7296.9394630144 RLY in, should get 200 CC out (i.e. 200_000000)
+        let (source_amount, destination_amount) = curve
+            .swap_a_to_b(7296_939463_014400_000000, 0, 5000_000000)
+            .unwrap();
+        assert_eq!(source_amount, 7296_939463_014400_000000);
+        assert_eq!(destination_amount, 200_000000);
+
+        // put in 7524.5214630093 more RLY, should get another 200 CC out
+        let (source_amount, destination_amount) = curve
+            .swap_a_to_b(
+                7524_521463_009300_000000,
+                7296_939463_014400_000000,
+                4800_000000,
+            )
+            .unwrap();
+        assert_eq!(source_amount, 7524_521463_009300_000000);
+        assert_eq!(destination_amount, 200_000000);
     }
 }
 

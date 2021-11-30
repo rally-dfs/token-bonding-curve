@@ -493,6 +493,45 @@ describe('anchor-token-swap', () => {
       (await cToken.getAccountInfo(cTokenSwapAccount.publicKey)).amount.toString(),
       "440.00000000".replace(".", ""));
 
+    // first user swaps back 30 CC -> 2175 RLY
+    swapTx = await program.rpc.swap(
+      new anchor.BN("3000000000"),
+      new anchor.BN(0),
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          userTransferAuthority: swapUser.publicKey,
+          source: cTokenUserAccount.publicKey,
+          swapSource: cTokenSwapAccount.publicKey,
+          swapDestination: rTokenSwapAccount.publicKey,
+          destination: rTokenUserAccount.publicKey,
+          poolMint: poolTokenMint.publicKey,
+          poolFee: feeTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [swapUser]
+      },
+    )
+
+    console.log("Your transaction signature", swapTx);
+
+    // user RLY goes from 7600 -> 9775
+    assert.strictEqual(
+      (await rToken.getAccountInfo(rTokenUserAccount.publicKey)).amount.toString(),
+      "9775.00000000".replace(".", ""));
+    // swap's RLY balance goes from 3900 -> 1725
+    assert.strictEqual(
+      (await rToken.getAccountInfo(rTokenSwapAccount.publicKey)).amount.toString(),
+      "1725.00000000".replace(".", ""));
+    // user CC goes from 240 -> 210
+    assert.strictEqual(
+      (await cToken.getAccountInfo(cTokenUserAccount.publicKey)).amount.toString(),
+      "210.00000000".replace(".", ""));
+    // swap's CC balance goes from 440 -> 470
+    assert.strictEqual(
+      (await cToken.getAccountInfo(cTokenSwapAccount.publicKey)).amount.toString(),
+      "470.00000000".replace(".", ""));
   });
 
 });

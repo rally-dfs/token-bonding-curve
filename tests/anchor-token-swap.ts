@@ -222,7 +222,7 @@ describe('anchor-token-swap', () => {
     // fee token account starts at 0
     assert.strictEqual(
       (await poolToken.getAccountInfo(feeTokenAccount.publicKey)).amount.toString(),
-      "0.00000000".replace(".", ""));
+      "0");
     // destination token starts at 10 (see CurveCalculator::INITIAL_SWAP_POOL_AMOUNT)
     assert.strictEqual(
       (await poolToken.getAccountInfo(destinationTokenAccount.publicKey)).amount.toString(),
@@ -250,7 +250,7 @@ describe('anchor-token-swap', () => {
           swapSource: aTokenSwapAccount.publicKey,
           swapDestination: bTokenSwapAccount.publicKey,
           destination: bTokenUserAccount.publicKey,
-          poolTokenMint: poolTokenMint.publicKey,
+          poolMint: poolTokenMint.publicKey,
           poolFee: feeTokenAccount.publicKey,
           tokenProgram: TOKEN_PROGRAM_PUBKEY,
         },

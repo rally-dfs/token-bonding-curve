@@ -293,7 +293,7 @@ describe('anchor-token-swap', () => {
     const cTokenMint = await generateTokenMint(provider, cTokenMintAuthority.publicKey);
 
     ///   0. `[writable, signer]` New Token-swap to create.
-    const tokenSwap = await generateNewGenericAccount(provider, provider.wallet.publicKey, LINEAR_SWAP_ACCOUNT_SPACE, program.programId, 0);
+    const tokenSwap = await generateNewGenericAccount(provider, provider.wallet.publicKey, SWAP_ACCOUNT_SPACE, program.programId, 0);
     ///   1. `[]` swap authority derived from `create_program_address(&[Token-swap account])`
     // corresponds to processor.rs Pubkey::find_program_address(&[&swap_info.key.to_bytes()], program_id);
     const swapAuthority = (await anchor.web3.PublicKey.findProgramAddress([tokenSwap.publicKey.toBuffer()], program.programId))[0];

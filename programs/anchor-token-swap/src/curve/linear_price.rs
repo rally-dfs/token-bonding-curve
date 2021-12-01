@@ -152,6 +152,10 @@ impl LinearPriceCurve {
         Some((a, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative))
     }
 
+    /// Returns the amount of R token locked at a given c_value (by plugging c_value into the integral function)
+    /// Since the return must be positive, this only works for C > initial_c_value (there are potentially rounding
+    /// errors when c_value == initial_c_value where a very small negative PreciseNumber should round up to 0, so
+    /// best not to call this with c_value == initial_c_value either)
     fn amt_r_locked_at_c_value_quadratic(&self, c_value: &PreciseNumber) -> Option<u128> {
         let (a, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
             self.liquidity_curve_quadratic_constants()?;
@@ -182,14 +186,7 @@ impl LinearPriceCurve {
             )
         };
 
-        let amount_u128 = amount_locked.to_imprecise()?;
-
-        // TODO: this is just placeholder, need to handle actual negative numbers either here or in swap_b_to_a, e.g. put in too many CCs
-
-        match amount_is_negative && amount_u128 != 0 {
-            true => None,
-            false => Some(amount_u128),
-        }
+        amount_locked.to_imprecise()
     }
 
     /// Returns the positive root for token_r_amount = 0.5m*c^2 + (r0 - m*c0)*c + i0
@@ -254,15 +251,24 @@ impl LinearPriceCurve {
 
         let c_start = self
             .c_value_with_amt_r_locked_quadratic(&(PreciseNumber::new(swap_destination_amount)?))?;
-        let c_end = c_start.checked_sub(&(PreciseNumber::new(source_amount)?))?;
+        // c_end can be negative if the user put in too many C tokens (handled below)
+        let (c_end, c_end_is_negative) =
+            c_start.unsigned_sub(&(PreciseNumber::new(source_amount)?));
 
-        // we're using the quadratic formula here to determine the amount of R after the swap, though we could use
-        // the geometry calculation too to determine the area between c_start and c_end (just like in swap_b_to_a_bsearch)
-        // probably a bit easier to read the geometry version, though if we already have all these quadratic math helpers then might as well use it (should be)
-        let r_end = self.amt_r_locked_at_c_value_quadratic(&c_end)?;
+        // if c_end <= initial_c_value (i.e. there aren't enough R tokens in the swap for all the C tokens they put in), then just give
+        // them all of the r tokens (swap_destination_amount) and only take the C tokens required to get down to initial_c_value
+        // this only works if we assume 0 R locked at initial_c_value
+        let initial_c_value = PreciseNumber::new(self.initial_token_c_price.into())?;
+        if c_end_is_negative || c_end.less_than_or_equal(&initial_c_value) {
+            let maximum_c_remaining = c_start.checked_sub(&initial_c_value)?.to_imprecise()?;
+            return Some((maximum_c_remaining, swap_destination_amount));
+        }
+
+        // otherwise if there's enough R tokens locked in swap_destination_amount, figure out the R value at c_end and give them the difference (swap_destination_amount - r_end) tokens
+        let r_end = self.amt_r_locked_at_c_value_quadratic(&c_end)?; // we're using the quadratic formula here to determine the amount of R after the swap, though we could use
+                                                                     // the geometry calculation too to determine the area between c_start and c_end (just like in swap_b_to_a_bsearch)
+                                                                     // probably a bit easier to read the geometry version, though if we already have all these quadratic math helpers then might as well use it (should be)
         let destination_amount = swap_destination_amount.checked_sub(r_end)?;
-
-        // TODO: need to handle rounding up/down, especially if not all the source_amount will be used (i.e. there's not enough swap_destination_amount)
 
         Some((source_amount, destination_amount))
     }
@@ -830,8 +836,6 @@ mod tests {
         assert_eq!(source_amount, 2_0000_0000);
         assert_eq!(destination_amount, 101_0000_0000);
 
-        // TODO: test what happens if source_amount gets out more than swap_destination_amount has left (e.g. i think 100K RLY should drain entire 5000CC with 12.5k RLY left)
-
         // similar to 145K segment of forte curve, but assume r has 18 decimals (this just lets us cram more precision into
         // the calculation, as long as we interpret it correctly back out at the end)
         // since r has 12 more decimals of precision than c, scale both slope and initial_token_r_price by 1e12
@@ -842,13 +846,12 @@ mod tests {
             initial_token_c_price: 145000_000000,
         };
 
-        // TODO: this case currently fails since the rounding error from 200 CC causes the calculation to underflow, need to handle putting in too many tokens
         // putting in 200 CC at 7296.9394630144 RLY, should get it all out
-        // let (source_amount, destination_amount) = curve
-        //     .swap_b_to_a(200_000000, 4800_000000, 7296_939463_019977_480000)
-        //     .unwrap();
-        // assert_eq!(source_amount, 200_000000);
-        // assert_eq!(destination_amount, 7296_939463_019977_480000);
+        let (source_amount, destination_amount) = curve
+            .swap_b_to_a(200_000000, 4800_000000, 7296_939463_019977_480000)
+            .unwrap();
+        assert_eq!(source_amount, 200_000000);
+        assert_eq!(destination_amount, 7296_939463_019977_480000);
 
         // put in 200 CC at 14821.4609260237 RLY, should get 7524.5214630093 RLY out
         let (source_amount, destination_amount) = curve
@@ -856,6 +859,31 @@ mod tests {
             .unwrap();
         assert_eq!(source_amount, 200_000000);
         assert_eq!(destination_amount / 1_000000_000000, 7524_521463); // only 6 decimals of precision for the CC so no need to compare past that
+
+        // put in 300 CC at 7296.9394630144 RLY, should get it all out (and only take 200 CC)
+        let (source_amount, destination_amount) = curve
+            .swap_b_to_a(300_000000, 4800_000000, 7296_939463_019977_480000)
+            .unwrap();
+        assert_eq!(source_amount, 200_000000);
+        assert_eq!(destination_amount, 7296_939463_019977_480000);
+
+        // a curve that starts at 0/0
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 2,
+            initial_token_r_price: 0,
+            initial_token_c_price: 0,
+        };
+
+        // put in 6 CC at 9 RLY, should get all 9 RLY out
+        let (source_amount, destination_amount) = curve.swap_b_to_a(6, 494, 9).unwrap();
+        assert_eq!(source_amount, 6);
+        assert_eq!(destination_amount, 9);
+
+        // put in 11 CC at 9 RLY, should get all 9 RLY out and only take 6 CC
+        let (source_amount, destination_amount) = curve.swap_b_to_a(11, 494, 9).unwrap();
+        assert_eq!(source_amount, 6);
+        assert_eq!(destination_amount, 9);
     }
 }
 

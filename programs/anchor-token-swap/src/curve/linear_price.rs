@@ -220,7 +220,7 @@ impl LinearPriceCurve {
         &self,
         source_amount: u128,
         swap_source_amount: u128,
-        _swap_destination_amount: u128,
+        swap_destination_amount: u128,
     ) -> Option<(u128, u128)> {
         // use swap_source_amount (collateral token) to determine where we are on the integration curve
         // note this only works if non-init deposits are disabled (and maybe if the initial deposit didn't have any token A in it?),
@@ -228,12 +228,26 @@ impl LinearPriceCurve {
 
         // quadratic formula version:
         let r_start = PreciseNumber::new(swap_source_amount)?;
-        let r_end = r_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
 
         // TODO: two sqrt calls is pretty expensive (50K each), we could potentially optimize this by storing the initial deposit amount on chain and inferring c_start from that?
         // e.g c_start = initial_deposit_amount - swap_destination_amount (obviously only works if we disallow non-init deposits, and requires a lot of threading)
         let c_start = self.c_value_with_amt_r_locked_quadratic(&r_start)?;
+
+        // if at c_start + swap_destination_amount (the maximum CC that be given out by the swap), the R value is <= source_amount,
+        // then only take that amount of R instead and give them all the CCs remaining
+        let maximum_r_remaining = self
+            .amt_r_locked_at_c_value_quadratic(
+                &(c_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?))?),
+            )?
+            .checked_sub(r_start.to_imprecise()?)?;
+        if maximum_r_remaining <= source_amount {
+            return Some((maximum_r_remaining, swap_destination_amount));
+        }
+
+        // otherwise, there's enough C tokens for all the R they put in, find the c_end value for the amount of R they're putting in and give them `c_end - c_start` tokens out
+        let r_end = r_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
         let c_end = self.c_value_with_amt_r_locked_quadratic(&r_end)?;
+
         let destination_amount = c_end.checked_sub(&c_start)?.to_imprecise()?;
 
         Some((source_amount, destination_amount))
@@ -769,6 +783,20 @@ mod tests {
             curve.swap_a_to_b(101_0000_0000, 0, 5000_0000_0000).unwrap();
         assert_eq!(source_amount, 101_0000_0000);
         assert_eq!(destination_amount, 2_0000_0000);
+
+        // putting in 5900K RLY @ 81600 RLY locked/20CC remaining should give out the last 20 CC
+        let (source_amount, destination_amount) = curve
+            .swap_a_to_b(5900_0000_0000, 81600_0000_0000, 20_0000_0000)
+            .unwrap();
+        assert_eq!(source_amount, 5900_0000_0000);
+        assert_eq!(destination_amount, 20_0000_0000);
+
+        // putting in 10K RLY @ 81600 RLY locked/20CC remaining should give out the last 20 CC and only take 5.9K RLY
+        let (source_amount, destination_amount) = curve
+            .swap_a_to_b(10000_0000_0000, 81600_0000_0000, 20_0000_0000)
+            .unwrap();
+        assert_eq!(source_amount, 5900_0000_0000);
+        assert_eq!(destination_amount, 20_0000_0000);
 
         // similar to 145K segment of forte curve, but assume r has 18 decimals (this just lets us cram more precision into
         // the calculation, as long as we interpret it correctly back out at the end)

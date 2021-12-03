@@ -2,6 +2,7 @@
 //! Currently this (especially `swap`) only works under the following assumptions:
 //! Deposits (except the initial deposit) are disabled
 //! The initial deposit should only have token B (the bonded token) and 0 token A (the collateral token)
+//! This curve only works with fees set to 0 (process_swap will panic otherwise)
 //! Withdrawals are disabled (maybe we can add in a check to enable it in emergencies?), TODO: this isn't implemented yet though
 
 use {
@@ -352,11 +353,7 @@ impl LinearPriceCurve {
 
     // TODO: this doesn't have enough precision, we're overflowing u128 too often (e.g. even on the r_end slope calculation)
     // /// Calculates the area (amount of token R locked) under the curve between c_start and c_end
-    fn amt_r_locked_between_c_values_u128(
-        &self,
-        c_start: u128, // TODO: try using all u128 for everything, might still be too expensive
-        c_end: u128,
-    ) -> Option<u128> {
+    fn amt_r_locked_between_c_values_u128(&self, c_start: u128, c_end: u128) -> Option<u128> {
         // TODO: write some tests for this
 
         let r_start = (self.slope_numerator as u128)
@@ -666,9 +663,16 @@ impl CurveCalculator for LinearPriceCurve {
     /// Validate the given supply on initialization.
     /// We require at least some bonded token B for the curve to be useful (collateral token can be 0)
     /// TODO: if we enable deposits, then this check isn't needed, the pool can start with 0 of both
-    fn validate_supply(&self, _token_r_amount: u64, token_c_amount: u64) -> Result<(), SwapError> {
+    fn validate_supply(&self, token_r_amount: u64, token_c_amount: u64) -> Result<(), SwapError> {
         if token_c_amount == 0 {
             return Err(SwapError::EmptySupply);
+        }
+
+        // i think there's probably a way to allow initial collateral token if we adjust the
+        // initial token values to take that into account, but seems easier to disallow it. it's the same
+        // as starting with 0 collateral token and then doing a swap anyway
+        if token_r_amount != 0 {
+            return Err(SwapError::InvalidSupply);
         }
         Ok(())
     }

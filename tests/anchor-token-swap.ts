@@ -279,9 +279,7 @@ describe('anchor-token-swap', () => {
       "1996.20000000".replace(".", ""));
   });
 
-  it('should initialize linear price swap!', async () => {
-
-    const program = anchor.workspace.AnchorTokenSwap;
+  const generateTestLinearSwapAccounts = async (programId: PublicKey, cTokenInitialSupply: number) => {
 
     // TODO: doing these in separate txns is really slow, could probably be optimized
 
@@ -293,25 +291,25 @@ describe('anchor-token-swap', () => {
     const cTokenMint = await generateTokenMint(provider, cTokenMintAuthority.publicKey);
 
     ///   0. `[writable, signer]` New Token-swap to create.
-    const tokenSwap = await generateNewGenericAccount(provider, provider.wallet.publicKey, SWAP_ACCOUNT_SPACE, program.programId, 0);
+    const tokenSwap = await generateNewGenericAccount(provider, provider.wallet.publicKey, SWAP_ACCOUNT_SPACE, programId, 0);
     ///   1. `[]` swap authority derived from `create_program_address(&[Token-swap account])`
     // corresponds to processor.rs Pubkey::find_program_address(&[&swap_info.key.to_bytes()], program_id);
-    const swapAuthority = (await anchor.web3.PublicKey.findProgramAddress([tokenSwap.publicKey.toBuffer()], program.programId))[0];
+    const swapAuthority = (await anchor.web3.PublicKey.findProgramAddress([tokenSwap.publicKey.toBuffer()], programId))[0];
 
     ///   2. `[]` token_a Account. Must be non zero, owned by swap authority.
     ///   3. `[]` token_b Account. Must be non zero, owned by swap authority.
     const rTokenSwapAccount = await generateTokenAccount(provider, rTokenMint, swapAuthority);
-    // note we can start with 0 RLY so no need to mint any token A here
+    // note we must start with 0 RLY so no need to mint any token A here
     const cTokenSwapAccount = await generateTokenAccount(provider, cTokenMint, swapAuthority);
-    await mintToAccount(provider, cTokenMintAuthority, cTokenMint, cTokenSwapAccount.publicKey, 500 * 10 ** 8);
+    await mintToAccount(provider, cTokenMintAuthority, cTokenMint, cTokenSwapAccount.publicKey, cTokenInitialSupply);
 
-    let rToken = new Token(provider.connection, rTokenMint.publicKey, TOKEN_PROGRAM_ID, rTokenMintAuthority);
-    let cToken = new Token(provider.connection, cTokenMint.publicKey, TOKEN_PROGRAM_ID, cTokenMintAuthority);
+    const rToken = new Token(provider.connection, rTokenMint.publicKey, TOKEN_PROGRAM_ID, rTokenMintAuthority);
+    const cToken = new Token(provider.connection, cTokenMint.publicKey, TOKEN_PROGRAM_ID, cTokenMintAuthority);
 
     ///   4. `[writable]` Pool Token Mint. Must be empty, owned by swap authority.
     const poolTokenMint = await generateTokenMint(provider, swapAuthority);
 
-    let poolToken = new Token(provider.connection, poolTokenMint.publicKey, TOKEN_PROGRAM_ID, tokenSwap);
+    const poolToken = new Token(provider.connection, poolTokenMint.publicKey, TOKEN_PROGRAM_ID, tokenSwap);
 
     ///   5. `[]` Pool Token Account to deposit trading and withdraw fees.
     ///   Must be empty, not owned by swap authority
@@ -323,25 +321,47 @@ describe('anchor-token-swap', () => {
     const destinationAuthority = await generateNewSignerAccount(provider);
     const destinationTokenAccount = await generateTokenAccount(provider, poolTokenMint, destinationAuthority.publicKey);
 
-    let trade_fee_numerator = new anchor.BN(0);
-    let trade_fee_denominator = new anchor.BN(100);
-    let owner_trade_fee_numerator = new anchor.BN(0);
-    let owner_trade_fee_denominator = new anchor.BN(100);
-    let owner_withdraw_fee_numerator = new anchor.BN(0);
-    let owner_withdraw_fee_denominator = new anchor.BN(100);
-    let host_fee_numerator = new anchor.BN(0);
-    let host_fee_denominator = new anchor.BN(100);
-
-    let fees = {
-      trade_fee_numerator,
-      trade_fee_denominator,
-      owner_trade_fee_numerator,
-      owner_trade_fee_denominator,
-      owner_withdraw_fee_numerator,
-      owner_withdraw_fee_denominator,
-      host_fee_numerator,
-      host_fee_denominator,
+    return {
+      rTokenMintAuthority,
+      cTokenMintAuthority,
+      rTokenMint,
+      cTokenMint,
+      tokenSwap,
+      swapAuthority,
+      rTokenSwapAccount,
+      cTokenSwapAccount,
+      rToken,
+      cToken,
+      poolTokenMint,
+      poolToken,
+      feeAuthority,
+      feeTokenAccount,
+      destinationAuthority,
+      destinationTokenAccount,
     };
+  };
+
+  it('should initialize linear price swap!', async () => {
+    const program = anchor.workspace.AnchorTokenSwap;
+
+    const {
+      rTokenMintAuthority,
+      cTokenMintAuthority,
+      rTokenMint,
+      cTokenMint,
+      tokenSwap,
+      swapAuthority,
+      rTokenSwapAccount,
+      cTokenSwapAccount,
+      rToken,
+      cToken,
+      poolTokenMint,
+      poolToken,
+      feeAuthority,
+      feeTokenAccount,
+      destinationAuthority,
+      destinationTokenAccount,
+    } = await generateTestLinearSwapAccounts(program.programId, 500 * 10 ** 8);
 
     // example curve - 0.5 slope (i.e. price increases by "1 base RLY per base CC" for every 2 display CC AKA 2e8 CC), starting price of 50 RLY at 300 (display) CC
     let slope_numerator = new anchor.BN(1);
@@ -349,26 +369,7 @@ describe('anchor-token-swap', () => {
     let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
     let c0 = new anchor.BN(30000000000);
 
-    console.log(`tokenSwap.publicKey ${tokenSwap.publicKey}`);
-    console.log(`swapAuthority ${swapAuthority}`);
-    console.log(`rTokenMint.publicKey ${rTokenMint.publicKey}`);
-    console.log(`cTokenMint.publicKey ${cTokenMint.publicKey}`);
-    console.log(`poolTokenMint.publicKey ${poolTokenMint.publicKey}`);
-    console.log(`feeTokenAccount.publicKey ${feeTokenAccount.publicKey}`);
-    console.log(`destinationTokenAccount.publicKey ${destinationTokenAccount.publicKey}`);
-    console.log(`TOKEN_PROGRAM_PUBKEY ${TOKEN_PROGRAM_PUBKEY}`);
-    console.log(`fees ${JSON.stringify(fees)}`);
-
     const tx = await program.rpc.initializeLinearPrice(
-      // TODO: not sure why passing fees in here doesn't work, need to look into it
-      trade_fee_numerator,
-      trade_fee_denominator,
-      owner_trade_fee_numerator,
-      owner_trade_fee_denominator,
-      owner_withdraw_fee_numerator,
-      owner_withdraw_fee_denominator,
-      host_fee_numerator,
-      host_fee_denominator,
       slope_numerator,
       slope_denominator,
       r0,
@@ -616,4 +617,77 @@ describe('anchor-token-swap', () => {
       "0".replace(".", ""));
   });
 
+
+  it('should fail invalid linear price swaps!', async () => {
+
+    const program = anchor.workspace.AnchorTokenSwap;
+
+    const {
+      rTokenMintAuthority,
+      cTokenMintAuthority,
+      rTokenMint,
+      cTokenMint,
+      tokenSwap,
+      swapAuthority,
+      rTokenSwapAccount,
+      cTokenSwapAccount,
+      rToken,
+      cToken,
+      poolTokenMint,
+      poolToken,
+      feeAuthority,
+      feeTokenAccount,
+      destinationAuthority,
+      destinationTokenAccount,
+    } = await generateTestLinearSwapAccounts(program.programId, 0); // note we mint 0 initial tokens here
+
+    // example curve - 0.5 slope (i.e. price increases by "1 base RLY per base CC" for every 2 display CC AKA 2e8 CC), starting price of 50 RLY at 300 (display) CC
+    let slope_numerator = new anchor.BN(1);
+    let slope_denominator = new anchor.BN(200000000);
+    let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let c0 = new anchor.BN(30000000000);
+
+    // zero token B on init should fail 
+    await assert.rejects(program.rpc.initializeLinearPrice(
+      slope_numerator,
+      slope_denominator,
+      r0,
+      c0,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          tokenA: rTokenSwapAccount.publicKey,
+          tokenB: cTokenSwapAccount.publicKey,
+          pool: poolTokenMint.publicKey,
+          fee: feeTokenAccount.publicKey,
+          destination: destinationTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [tokenSwap],
+      }));
+
+    // non zero collateral token not allowed
+    await mintToAccount(provider, cTokenMintAuthority, cTokenMint, cTokenSwapAccount.publicKey, 1);
+    await mintToAccount(provider, rTokenMintAuthority, rTokenMint, rTokenSwapAccount.publicKey, 1);
+
+    await assert.rejects(program.rpc.initializeLinearPrice(
+      slope_numerator,
+      slope_denominator,
+      r0,
+      c0,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          tokenA: rTokenSwapAccount.publicKey,
+          tokenB: cTokenSwapAccount.publicKey,
+          pool: poolTokenMint.publicKey,
+          fee: feeTokenAccount.publicKey,
+          destination: destinationTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [tokenSwap],
+      }));
+  });
 });

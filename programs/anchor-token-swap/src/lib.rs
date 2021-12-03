@@ -61,31 +61,24 @@ mod anchor_token_swap {
     ///   creating the SwapCurve based on the primitives passed into the different instructions
     pub fn initialize_linear_price(
         ctx: Context<Initialize>,
-        // TODO: should be able to just accept Fees in here instead of all these but wasn't working, not sure why
-        trade_fee_numerator: u64,
-        trade_fee_denominator: u64,
-        owner_trade_fee_numerator: u64,
-        owner_trade_fee_denominator: u64,
-        owner_withdraw_fee_numerator: u64,
-        owner_withdraw_fee_denominator: u64,
-        host_fee_numerator: u64,
-        host_fee_denominator: u64,
         slope_numerator: u64,
         slope_denominator: u64,
         initial_token_a_price: u64,
         initial_token_b_price: u64,
     ) -> ProgramResult {
+        // just hardcode fees to 0 for linear curve, we don't support those right now (would require implementing
+        // some withdraw logic to calculate the fees during swap)
         instructions::initialize::handler(
             ctx,
             Fees {
-                trade_fee_numerator,
-                trade_fee_denominator,
-                owner_trade_fee_numerator,
-                owner_trade_fee_denominator,
-                owner_withdraw_fee_numerator,
-                owner_withdraw_fee_denominator,
-                host_fee_numerator,
-                host_fee_denominator,
+                trade_fee_numerator: 0,
+                trade_fee_denominator: 1,
+                owner_trade_fee_numerator: 0,
+                owner_trade_fee_denominator: 1,
+                owner_withdraw_fee_numerator: 0,
+                owner_withdraw_fee_denominator: 1,
+                host_fee_numerator: 0,
+                host_fee_denominator: 1,
             },
             curve::base::SwapCurve {
                 curve_type: curve::base::CurveType::LinearPrice,

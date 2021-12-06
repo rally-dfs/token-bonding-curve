@@ -617,7 +617,6 @@ describe('anchor-token-swap', () => {
       "0".replace(".", ""));
   });
 
-
   it('should fail invalid linear price swaps!', async () => {
 
     const program = anchor.workspace.AnchorTokenSwap;
@@ -690,4 +689,168 @@ describe('anchor-token-swap', () => {
         signers: [tokenSwap],
       }));
   });
+
+  it('should disallow linear price swaps deposits/withdrawals!', async () => {
+    const program = anchor.workspace.AnchorTokenSwap;
+
+    const {
+      rTokenMintAuthority,
+      cTokenMintAuthority,
+      rTokenMint,
+      cTokenMint,
+      tokenSwap,
+      swapAuthority,
+      rTokenSwapAccount,
+      cTokenSwapAccount,
+      rToken,
+      cToken,
+      poolTokenMint,
+      poolToken,
+      feeAuthority,
+      feeTokenAccount,
+      destinationAuthority,
+      destinationTokenAccount,
+    } = await generateTestLinearSwapAccounts(program.programId, 500 * 10 ** 8);
+
+    // example curve - 0.5 slope (i.e. price increases by "1 base RLY per base CC" for every 2 display CC AKA 2e8 CC), starting price of 50 RLY at 300 (display) CC
+    let slope_numerator = new anchor.BN(1);
+    let slope_denominator = new anchor.BN(200000000);
+    let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let c0 = new anchor.BN(30000000000);
+
+    const tx = await program.rpc.initializeLinearPrice(
+      slope_numerator,
+      slope_denominator,
+      r0,
+      c0,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          tokenA: rTokenSwapAccount.publicKey,
+          tokenB: cTokenSwapAccount.publicKey,
+          pool: poolTokenMint.publicKey,
+          fee: feeTokenAccount.publicKey,
+          destination: destinationTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [tokenSwap],
+      });
+
+    // make sure deposits are disabled (create a new A/B token holder to try and deposit)
+    const testUser = await generateNewSignerAccount(provider);
+
+    const rTokenUserAccount = await generateTokenAccount(provider, rTokenMint, testUser.publicKey);
+    await mintToAccount(provider, rTokenMintAuthority, rTokenMint, rTokenUserAccount.publicKey, 100 * 10 ** 8);
+    const cTokenUserAccount = await generateTokenAccount(provider, cTokenMint, testUser.publicKey);
+    await mintToAccount(provider, cTokenMintAuthority, cTokenMint, cTokenUserAccount.publicKey, 200 * 10 ** 8);
+
+    const poolTokenUserAccount = await generateTokenAccount(provider, poolTokenMint, testUser.publicKey);
+
+    // try to put in (at most) 100 A tokens/200 B tokens and get 10 pool tokens out
+    let poolTokenAmount = new anchor.BN(10 * 10 ** 8);
+    let maximumTokenAAmount = new anchor.BN(100 * 10 ** 8);
+    let maximumTokenBAmount = new anchor.BN(200 * 10 ** 8);
+
+    await assert.rejects(program.rpc.depositAllTokenTypes(
+      poolTokenAmount,
+      maximumTokenAAmount,
+      maximumTokenBAmount,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          userTransferAuthority: testUser.publicKey,
+          sourceA: rTokenUserAccount.publicKey,
+          sourceB: cTokenUserAccount.publicKey,
+          tokenA: rTokenSwapAccount.publicKey,
+          tokenB: cTokenSwapAccount.publicKey,
+          poolMint: poolTokenMint.publicKey,
+          destination: poolTokenUserAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [testUser],
+      }));
+
+    // make sure deposit single single also doesn't work
+
+    // try to put in exactly 100 B tokens and get (at least) 10 pool tokens out
+    let sourceTokenAmount = new anchor.BN(100 * 10 ** 8);
+    let minimumPoolTokenAmount = new anchor.BN(10 * 10 ** 8);
+
+    await assert.rejects(program.rpc.depositSingleTokenTypeExactAmountIn(
+      sourceTokenAmount,
+      minimumPoolTokenAmount,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          userTransferAuthority: testUser.publicKey,
+          // note we're using token B here
+          sourceToken: cTokenUserAccount.publicKey,
+          swapTokenA: rTokenSwapAccount.publicKey,
+          swapTokenB: cTokenSwapAccount.publicKey,
+          poolMint: poolTokenMint.publicKey,
+          destination: poolTokenUserAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [testUser],
+      }));
+
+    // make sure withdrawals are disabled (reuse destinationTokenAccount since it holds all the pool tokens)
+    const destinationRTokenAccount = await generateTokenAccount(provider, rTokenMint, destinationAuthority.publicKey);
+    const destinationCTokenAccount = await generateTokenAccount(provider, cTokenMint, destinationAuthority.publicKey);
+
+    // try to put in 10 pool tokens and get (at least) 100 B tokens out
+    poolTokenAmount = new anchor.BN(10 * 10 ** 8);
+    let minimumTokenAAmount = new anchor.BN(0); // this should be 0 since there's no A in the swap yet
+    let minimumTokenBAmount = new anchor.BN(100 * 10 ** 8);
+
+    await assert.rejects(program.rpc.withdrawAllTokenTypes(
+      poolTokenAmount,
+      minimumTokenAAmount,
+      minimumTokenBAmount,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          userTransferAuthority: destinationAuthority.publicKey,
+          poolMint: poolTokenMint.publicKey,
+          source: destinationTokenAccount.publicKey,
+          swapTokenA: rTokenSwapAccount.publicKey,
+          swapTokenB: cTokenSwapAccount.publicKey,
+          destinationTokenA: destinationRTokenAccount.publicKey,
+          destinationTokenB: destinationCTokenAccount.publicKey,
+          feeAccount: feeTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [destinationAuthority],
+      }));
+
+    // also check single token withdrawals
+    // try to put in (at most) 10 pool tokens and get exactly 10 B tokens out
+    let destinationTokenAmount = new anchor.BN(100 * 10 ** 8);
+    let maximumPoolTokenAmount = new anchor.BN(10 * 10 ** 8);
+
+    await assert.rejects(program.rpc.withdrawSingleTokenTypeExactAmountOut(
+      destinationTokenAmount,
+      maximumPoolTokenAmount,
+      {
+        accounts: {
+          tokenSwap: tokenSwap.publicKey,
+          swapAuthority: swapAuthority,
+          userTransferAuthority: destinationAuthority.publicKey,
+          poolMint: poolTokenMint.publicKey,
+          poolTokenSource: destinationTokenAccount.publicKey,
+          swapTokenA: rTokenSwapAccount.publicKey,
+          swapTokenB: cTokenSwapAccount.publicKey,
+          // note we're using B as the token here (swap has 0 A token right now anyway)
+          destination: destinationCTokenAccount.publicKey,
+          poolFeeAccount: feeTokenAccount.publicKey,
+          tokenProgram: TOKEN_PROGRAM_PUBKEY,
+        },
+        signers: [destinationAuthority],
+      }));
+  });
+
 });

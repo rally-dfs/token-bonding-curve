@@ -564,39 +564,14 @@ impl CurveCalculator for LinearPriceCurve {
         swap_token_c_amount: u128,
         round_direction: RoundDirection,
     ) -> Option<TradingTokenResult> {
+        // this causes a panic if withdraw_all_token_types is called but that's ok for now, cheap way of
+        // disabling withdrawals without having to change how SwapCurve works
         None
-        // TODO: this is constant curve impl:
-        // let token_c_price = self.token_c_price as u128;
-        // let total_value = self
-        //     .normalized_value(swap_token_r_amount, swap_token_c_amount)?
-        //     .to_imprecise()?;
 
-        // let (token_r_amount, token_c_amount) = match round_direction {
-        //     RoundDirection::Floor => {
-        //         let token_r_amount = pool_tokens
-        //             .checked_mul(total_value)?
-        //             .checked_div(pool_token_supply)?;
-        //         let token_c_amount = pool_tokens
-        //             .checked_mul(total_value)?
-        //             .checked_div(token_c_price)?
-        //             .checked_div(pool_token_supply)?;
-        //         (token_r_amount, token_c_amount)
-        //     }
-        //     RoundDirection::Ceiling => {
-        //         let (token_r_amount, _) = pool_tokens
-        //             .checked_mul(total_value)?
-        //             .checked_ceil_div(pool_token_supply)?;
-        //         let (pool_value_as_token_c, _) = pool_tokens
-        //             .checked_mul(total_value)?
-        //             .checked_ceil_div(token_c_price)?;
-        //         let (token_c_amount, _) =
-        //             pool_value_as_token_c.checked_ceil_div(pool_token_supply)?;
-        //         (token_r_amount, token_c_amount)
-        //     }
-        // };
+        // could we do something like this if we just want pool tokens to be 1-1 with B tokens and not withdrawable/depositable for A tokens?
         // Some(TradingTokenResult {
-        //     token_r_amount,
-        //     token_c_amount,
+        //     token_a_amount: 0,
+        //     token_b_amount: pool_tokens,
         // })
     }
 
@@ -612,17 +587,8 @@ impl CurveCalculator for LinearPriceCurve {
         pool_supply: u128,
         trade_direction: TradeDirection,
     ) -> Option<u128> {
+        // this never gets called since allows_withdrawals is false (would panic otherwise so still safe)
         None
-        // TODO: this is constant curve impl:
-        // trading_tokens_to_pool_tokens(
-        //     self.token_c_price,
-        //     source_amount,
-        //     swap_token_r_amount,
-        //     swap_token_c_amount,
-        //     pool_supply,
-        //     trade_direction,
-        //     RoundDirection::Floor,
-        // )
     }
 
     /// Get the amount of pool tokens for the withdrawn amount of token A or B.
@@ -637,17 +603,10 @@ impl CurveCalculator for LinearPriceCurve {
         pool_supply: u128,
         trade_direction: TradeDirection,
     ) -> Option<u128> {
+        // this causes a panic if SwapCurve.withdraw_single_token_type_exact_out instruction is called
+        // but that's ok for now, cheap way of disabling withdrawals without having to change how SwapCurve works
+        // (also if a non-zero fee curve is created this would also cause a panic, though that's disabled at the lib.rs level)
         None
-        // TODO: this is constant curve impl:
-        // trading_tokens_to_pool_tokens(
-        //     self.token_c_price,
-        //     source_amount,
-        //     swap_token_r_amount,
-        //     swap_token_c_amount,
-        //     pool_supply,
-        //     trade_direction,
-        //     RoundDirection::Ceiling,
-        // )
     }
 
     /// Validate that the given curve has no invalid parameters

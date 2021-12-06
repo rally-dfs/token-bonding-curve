@@ -8,7 +8,8 @@ pub struct DepositSingleTokenTypeExactAmountIn<'info> {
     pub token_swap: AccountInfo<'info>,
     ///   1. `[]` swap authority
     pub swap_authority: AccountInfo<'info>,
-    ///   2. `[]` user transfer authority
+    ///   2. `[signer]` user transfer authority
+    #[account(signer)]
     pub user_transfer_authority: AccountInfo<'info>,
     ///   3. `[writable]` token_(A|B) SOURCE Account, amount is transferable by user transfer authority,
     #[account(mut)]

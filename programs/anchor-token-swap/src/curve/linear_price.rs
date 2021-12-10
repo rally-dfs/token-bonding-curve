@@ -386,26 +386,13 @@ impl LinearPriceCurve {
         let r_delta = r_end.checked_sub(&r_start)?;
         let c_delta = c_end.checked_sub(&c_start)?;
 
-        let square_area = match c_delta.checked_mul(&r_start) {
-            Some(val) => val,
-            // just treat overflow as max value (r locked can't be more than u128 MAX)
-            None => return PreciseNumber::new(u128::MAX),
-        };
+        let square_area = c_delta.checked_mul(&r_start)?;
 
-        let triangle_area = match c_delta
+        let triangle_area = c_delta
             .checked_div(&(PreciseNumber::new(2))?)?
-            .checked_mul(&r_delta)
-        {
-            Some(val) => val,
-            // just treat overflow as max value (r locked can't be more than u128 MAX)
-            None => return PreciseNumber::new(u128::MAX),
-        };
+            .checked_mul(&r_delta)?;
 
-        Some(match square_area.checked_add(&triangle_area) {
-            Some(val) => val,
-            // just treat overflow as max value (r locked can't be more than u128 MAX)
-            None => return PreciseNumber::new(u128::MAX),
-        })
+        square_area.checked_add(&triangle_area)
     }
 
     // TODO: this doesn't have enough precision, we're overflowing u128 too often (e.g. even on the r_end slope calculation)
@@ -417,12 +404,8 @@ impl LinearPriceCurve {
             .checked_mul(c_start.checked_sub(self.initial_token_c_price.into())?)?
             .checked_div(self.slope_denominator.into())?
             .checked_add(self.initial_token_r_price.into())?;
-        let r_end_num = match (self.slope_numerator as u128)
-            .checked_mul(c_end.checked_sub(self.initial_token_c_price.into())?)
-        {
-            Some(val) => val,
-            None => u128::MAX, // TODO: rounding down to u128 max to handle overflows but this seems like it's probably not be correct
-        };
+        let r_end_num = (self.slope_numerator as u128)
+            .checked_mul(c_end.checked_sub(self.initial_token_c_price.into())?)?;
         let r_end = r_end_num
             .checked_div(self.slope_denominator.into())?
             .checked_add(self.initial_token_r_price.into())?;
@@ -430,19 +413,10 @@ impl LinearPriceCurve {
         let r_delta = r_end.checked_sub(r_start)?;
         let c_delta = c_end.checked_sub(c_start)?;
 
-        let square_area = match c_delta.checked_mul(r_start) {
-            Some(val) => val,
-            None => return Some(u128::MAX),
-        };
-        let triangle_area = match c_delta.checked_div(2)?.checked_mul(r_delta) {
-            Some(val) => val,
-            None => return Some(u128::MAX),
-        };
+        let square_area = c_delta.checked_mul(r_start)?;
+        let triangle_area = c_delta.checked_div(2)?.checked_mul(r_delta)?;
 
-        Some(match square_area.checked_add(triangle_area) {
-            Some(val) => val,
-            None => u128::MAX,
-        })
+        square_area.checked_add(triangle_area)
     }
 
     fn c_value_with_amt_r_locked_bsearch_u128(

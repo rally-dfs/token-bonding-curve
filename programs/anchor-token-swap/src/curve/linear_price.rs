@@ -53,7 +53,8 @@ fn sqrt_babylonian(x: u128) -> Option<u128> {
 /// Returns the positive root of x given 0 = a*x^2 + bx + c
 /// a is assumed to always be positive
 fn solve_quadratic_positive_root(
-    a: &PreciseNumber,
+    a_numerator: &PreciseNumber,
+    a_denominator: &PreciseNumber,
     b_abs_value: &PreciseNumber,
     b_is_negative: bool,
     c_abs_value: &PreciseNumber,
@@ -64,9 +65,10 @@ fn solve_quadratic_positive_root(
     // solve x = (-b + sqrt(b^2 - 4ac)) / 2a
 
     // a * 4 * c
-    let four_a_c_abs_value = a
+    let four_a_c_abs_value = a_numerator
         .checked_mul(&(PreciseNumber::new(4)?))?
-        .checked_mul(c_abs_value)?;
+        .checked_mul(c_abs_value)?
+        .checked_div(a_denominator)?;
 
     // b^2 - four_a_c
     let b_squared = b_abs_value.checked_mul(b_abs_value)?;
@@ -82,9 +84,6 @@ fn solve_quadratic_positive_root(
     let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
     let sqrt_b2_minus_4ac = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
 
-    // 2 * a
-    let two_a = a.checked_mul(&(PreciseNumber::new(2)?))?;
-
     // numerator is sqrt(b^2-4ac) - b
     let numerator = match b_is_negative {
         true => {
@@ -98,8 +97,12 @@ fn solve_quadratic_positive_root(
         }
     };
 
-    // finally we return (sqrt(b^2-4ac) - b)/2a
-    numerator.checked_div(&two_a)
+    // finally we return (sqrt(b^2-4ac) - b)/2a,
+    // AKA numerator * a_denominator / a_numerator / 2 (do all the division last)
+    numerator
+        .checked_mul(a_denominator)?
+        .checked_div(&a_numerator)?
+        .checked_div(&(PreciseNumber::new(2)?))
 }
 
 /// These functions use the integral of the linear price curve to determine liquidity of R at a
@@ -113,21 +116,41 @@ impl LinearPriceCurve {
     /// Returns the coefficients a, b, b_is_negative, i, i_is_negative in the liquidity integral
     /// token_r_bonded = 0.5m*c^2 + (r0 - m*c0)*c + i0
     /// a == 0.5m, b == (r0 - m*c0), i0 == integration constant when 0 collateral token is locked at c0
+    /// Note a is returned as a fraction since returning it as a pre-divided PreciseNumber loses a lot of
+    /// precision (only 12 decimal digits max) - we're going to be multiplying it against prices (a*c^2) so
+    /// no need to lose that precision (and as long as slope_numerator/price are all u64 there's plenty of
+    /// room in PreciseNumber to avoid overflow)
     fn liquidity_curve_quadratic_constants(
         &self,
-    ) -> Option<(PreciseNumber, PreciseNumber, bool, PreciseNumber, bool)> {
+    ) -> Option<(
+        PreciseNumber, // a numerator
+        PreciseNumber, // a denominator
+        PreciseNumber, // b abs value
+        bool,          // b is negative
+        PreciseNumber, // i0 abs value
+        bool,          // i0 is negative
+    )> {
 
         let slope_numerator = PreciseNumber::new(self.slope_numerator.into())?;
         let slope_denominator = PreciseNumber::new(self.slope_denominator.into())?;
-        let m = slope_numerator.checked_div(&slope_denominator)?;
         let r0 = PreciseNumber::new(self.initial_token_r_price.into())?;
         let c0 = PreciseNumber::new(self.initial_token_c_price.into())?;
 
-        // a == 0.5m
-        let a = m.checked_div(&(PreciseNumber::new(2)?))?;
+        // a == 0.5m, precalculate a*c0^2 (do the division last so we don't lose precision)
+        let a_numerator = slope_numerator.checked_mul(&(PreciseNumber::new(1)?))?;
+        let a_denominator = slope_denominator.checked_mul(&(PreciseNumber::new(2)?))?;
+        let a_c0_squared_numerator = a_numerator.checked_mul(&c0)?.checked_mul(&c0)?;
+        let a_c0_squared = a_c0_squared_numerator
+            .checked_div(&slope_denominator)?
+            .checked_div(&(PreciseNumber::new(2)?))?; // this is a little more precise if we divide here instead of using a_denominator
+
         // TODO: rewrite everything using foo_is_positive instead of foo_is_negative, probably way easier to read
+
         // b == r0 - m*c0 (need to use unsigned_sub here to handle negatives)
-        let (b_abs_value, b_is_negative) = r0.unsigned_sub(&(m.checked_mul(&c0)?));
+        let mc0 = slope_numerator
+            .checked_mul(&c0)?
+            .checked_div(&slope_denominator)?;
+        let (b_abs_value, b_is_negative) = r0.unsigned_sub(&mc0);
 
         // calculate integration constant i0 when 0 collateral token is locked at c0,
         // i.e. 0 = a*c0^2 + b*c0 + i
@@ -135,22 +158,23 @@ impl LinearPriceCurve {
         if b_is_negative {
             // since a is always positive, it's a little cleaner to solve for -i = a*c0^2 + b*c0
             // instead of working with all the negatives with PreciseNumber
-            let negative_i0_info = a
-                .checked_mul(&c0)?
-                .checked_mul(&c0)?
-                .unsigned_sub(&(b_abs_value.checked_mul(&c0)?));
+            let negative_i0_info = a_c0_squared.unsigned_sub(&(b_abs_value.checked_mul(&c0)?));
             i0_abs_value = negative_i0_info.0; // abs value doesn't change from -i to i
             i0_is_negative = !negative_i0_info.1; // i_is_negative is opposite of whether negative_i is negative
         } else {
             // a and b are both positive so i is always negative
-            i0_abs_value = a
-                .checked_mul(&c0)?
-                .checked_mul(&c0)?
-                .checked_add(&(b_abs_value.checked_mul(&c0)?))?;
+            i0_abs_value = a_c0_squared.checked_add(&(b_abs_value.checked_mul(&c0)?))?;
             i0_is_negative = true;
         }
 
-        Some((a, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative))
+        Some((
+            a_numerator,
+            a_denominator,
+            b_abs_value,
+            b_is_negative,
+            i0_abs_value,
+            i0_is_negative,
+        ))
     }
 
     /// Returns the amount of R token locked at a given c_value (by plugging c_value into the integral function)
@@ -158,10 +182,13 @@ impl LinearPriceCurve {
     /// errors when c_value == initial_c_value where a very small negative PreciseNumber should round up to 0, so
     /// best not to call this with c_value == initial_c_value either)
     fn amt_r_locked_at_c_value_quadratic(&self, c_value: &PreciseNumber) -> Option<u128> {
-        let (a, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
+        let (a_numerator, a_denominator, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
             self.liquidity_curve_quadratic_constants()?;
 
-        let a_price_squared = a.checked_mul(c_value)?.checked_mul(c_value)?;
+        let a_price_squared = a_numerator
+            .checked_mul(c_value)?
+            .checked_mul(c_value)?
+            .checked_div(&a_denominator)?;
         let b_price_abs_value = b_abs_value.checked_mul(c_value)?;
 
         // there's some rounding errors at the edges that can cause 0 to look like slightly negative numbers when calling
@@ -197,7 +224,7 @@ impl LinearPriceCurve {
         &self,
         token_r_amount: &PreciseNumber,
     ) -> Option<PreciseNumber> {
-        let (a, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
+        let (a_numerator, a_denominator, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
             self.liquidity_curve_quadratic_constants()?;
 
         // finally, solve token_r_amount = a*c^2 + b*c + i0
@@ -214,7 +241,14 @@ impl LinearPriceCurve {
             i_is_negative = i_info.1;
         }
 
-        solve_quadratic_positive_root(&a, &b_abs_value, b_is_negative, &i_abs_value, i_is_negative)
+        solve_quadratic_positive_root(
+            &a_numerator,
+            &a_denominator,
+            &b_abs_value,
+            b_is_negative,
+            &i_abs_value,
+            i_is_negative,
+        )
     }
 
     fn swap_a_to_b_quadratic(

@@ -80,7 +80,13 @@ fn solve_quadratic_positive_root(
     };
 
     // note we have to use u128 sqrt since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
-    let b2_minus_4ac_u128 = b2_minus_4ac.to_imprecise()?;
+    let b2_minus_4ac_u128 = match b2_minus_4ac.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?))
+    {
+        true => b2_minus_4ac.to_imprecise()?,
+        // to_imprecise panics instead of returning None so need to handle explicitly here
+        // TODO: should do this everywhere else we call to_imprecise also, probably put into a DFSPreciseNumber wrapper
+        false => return None,
+    };
     let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
     let sqrt_b2_minus_4ac = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
 
@@ -181,7 +187,7 @@ impl LinearPriceCurve {
     /// Since the return must be positive, this only works for C > initial_c_value (there are potentially rounding
     /// errors when c_value == initial_c_value where a very small negative PreciseNumber should round up to 0, so
     /// best not to call this with c_value == initial_c_value either)
-    fn amt_r_locked_at_c_value_quadratic(&self, c_value: &PreciseNumber) -> Option<u128> {
+    fn amt_r_locked_at_c_value_quadratic(&self, c_value: &PreciseNumber) -> Option<PreciseNumber> {
         let (a_numerator, a_denominator, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
             self.liquidity_curve_quadratic_constants()?;
 
@@ -214,7 +220,14 @@ impl LinearPriceCurve {
             )
         };
 
-        amount_locked.to_imprecise()
+        // only allow negatives if it's close to 0
+        // TODO: DFSPreciseNumber should fix this ugliness, we're just wrongly
+        // returning the positive version of a small negative number instead :(
+        if amount_is_negative && amount_locked.to_imprecise()? != 0 {
+            return None;
+        }
+
+        Some(amount_locked)
     }
 
     /// Returns the positive root for token_r_amount = 0.5m*c^2 + (r0 - m*c0)*c + i0
@@ -233,7 +246,7 @@ impl LinearPriceCurve {
         if i0_is_negative {
             // both i0 and (-token_r_amount) are negative - can just add the two amounts and keep the sign negative
             i_abs_value = i0_abs_value.checked_add(token_r_amount)?;
-            i_is_negative = i0_is_negative;
+            i_is_negative = true;
         } else {
             // otherwise, we have to do signed subtraction to solve (i0 - token_r_amount)
             let i_info = i0_abs_value.unsigned_sub(token_r_amount);
@@ -270,20 +283,30 @@ impl LinearPriceCurve {
 
         // if at c_start + swap_destination_amount (the maximum CC that be given out by the swap), the R value is <= source_amount,
         // then only take that amount of R instead and give them all the CCs remaining
-        let maximum_r_remaining = self
-            .amt_r_locked_at_c_value_quadratic(
-                &(c_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?))?),
-            )?
-            .checked_sub(r_start.to_imprecise()?)?;
-        if maximum_r_remaining <= source_amount {
-            return Some((maximum_r_remaining, swap_destination_amount));
+        // no need to panic here if checked_add fails, can just skip this check and do real calculation below
+        let maximum_c_value = c_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?));
+        if maximum_c_value.is_some() {
+            let maximum_r_locked =
+                self.amt_r_locked_at_c_value_quadratic(&maximum_c_value.unwrap())?;
+            let maximum_r_remaining = maximum_r_locked.checked_sub(&r_start)?;
+            // to_imprecise panics instead of returning None so need to handle explicitly here
+            // TODO: this could be simplified with DFSPreciseNumber
+            let maximum_r_remaining_u128 =
+                match maximum_r_remaining.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
+                    true => maximum_r_remaining.to_imprecise(),
+                    false => None,
+                };
+            if !maximum_r_remaining_u128.is_none() && maximum_r_remaining_u128? <= source_amount {
+                return Some((maximum_r_remaining_u128?, swap_destination_amount));
+            }
         }
 
         // otherwise, there's enough C tokens for all the R they put in, find the c_end value for the amount of R they're putting in and give them `c_end - c_start` tokens out
         let r_end = r_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
         let c_end = self.c_value_with_amt_r_locked_quadratic(&r_end)?;
 
-        let destination_amount = c_end.checked_sub(&c_start)?.to_imprecise()?;
+        let difference = c_end.checked_sub(&c_start)?;
+        let destination_amount = difference.to_imprecise()?;
 
         Some((source_amount, destination_amount))
     }
@@ -317,7 +340,7 @@ impl LinearPriceCurve {
         let r_end = self.amt_r_locked_at_c_value_quadratic(&c_end)?; // we're using the quadratic formula here to determine the amount of R after the swap, though we could use
                                                                      // the geometry calculation too to determine the area between c_start and c_end (just like in swap_b_to_a_bsearch)
                                                                      // probably a bit easier to read the geometry version, though if we already have all these quadratic math helpers then might as well use it (should be)
-        let destination_amount = swap_destination_amount.checked_sub(r_end)?;
+        let destination_amount = swap_destination_amount.checked_sub(r_end.to_imprecise()?)?;
 
         Some((source_amount, destination_amount))
     }

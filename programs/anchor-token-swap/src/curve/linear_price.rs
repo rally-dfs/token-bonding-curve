@@ -79,16 +79,30 @@ fn solve_quadratic_positive_root(
         false => b_squared.checked_sub(&four_a_c_abs_value)?, // we're going to sqrt this so no need for unsigned_sub
     };
 
-    // note we have to use u128 sqrt since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
-    let b2_minus_4ac_u128 = match b2_minus_4ac.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?))
-    {
-        true => b2_minus_4ac.to_imprecise()?,
-        // to_imprecise panics instead of returning None so need to handle explicitly here
-        // TODO: should do this everywhere else we call to_imprecise also, probably put into a DFSPreciseNumber wrapper
-        false => return None,
-    };
-    let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
-    let sqrt_b2_minus_4ac = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
+    let sqrt_b2_minus_4ac;
+    if b2_minus_4ac.less_than(&(PreciseNumber::new(1)?)) {
+        // PreciseNumber's out of the box sqrt is too inaccurate for numbers < 1, add as many
+        // decimals as we can fit into u128 (12 max from PreciseNumber + 26) and then do it manually
+        let b2_minus_4ac_value =
+            b2_minus_4ac.checked_mul(&(PreciseNumber::new(100_0000_0000_0000_0000_0000_0000)?))?;
+        let b2_minus_4ac_value_u128 = b2_minus_4ac_value.to_imprecise()?;
+        let sqrt_b2_minus_4ac_value_u128 = sqrt_babylonian(b2_minus_4ac_value_u128)?;
+
+        // convert back to PreciseNumber and divide result by 13 decimals
+        sqrt_b2_minus_4ac = PreciseNumber::new(sqrt_b2_minus_4ac_value_u128)?
+            .checked_div(&(PreciseNumber::new(10_0000_0000_0000)?))?;
+    } else {
+        // note we have to use u128 sqrt since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
+        let b2_minus_4ac_u128 =
+            match b2_minus_4ac.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
+                true => b2_minus_4ac.to_imprecise()?,
+                // to_imprecise panics instead of returning None so need to handle explicitly here
+                // TODO: should do this everywhere else we call to_imprecise also, probably put into a DFSPreciseNumber wrapper
+                false => return None,
+            };
+        let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
+        sqrt_b2_minus_4ac = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
+    }
 
     // numerator is sqrt(b^2-4ac) - b
     let numerator = match b_is_negative {
@@ -1359,5 +1373,74 @@ mod tests {
             16 // should still only take this much C
         );
         assert_eq!(result.destination_amount_swapped, 295147905179352824368);
+    }
+
+    /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
+    /// some example curves with large numbers (and make sure they return None instead of something crazy)
+    #[test]
+    fn swap_large_price_very_low_slope() {
+        // example curve with lowest possible slope and 0 starting R price (costs very little R to get a lot of C out)
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            // since PreciseNumber only has 12 decimals of precision, anything that
+            // doesn't divide evenly or is < 1e-12 will be treated as 0 slope
+            // (see workaround below for smaller slopes/more precision)
+            slope_denominator: 1_000_000_000_000,
+            initial_token_r_price: 0,
+            initial_token_c_price: u64::MAX.into(),
+        };
+
+        // 18446744073709551615.00 <- C value at R = 0
+        // 18446744073710965828.56 <- C value at R = 1
+        // diff is 1414213.56
+        let result = curve.swap_without_fees(1, 0, 1_00000_00000_00000_00000, TradeDirection::AtoB);
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1,
+                destination_amount_swapped: 1414213
+            }
+        );
+
+        // note this is treated as 0 since the slope is < 1e-12
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 10_000_000_000_000,
+            initial_token_r_price: 2,
+            initial_token_c_price: u64::MAX.into(),
+        };
+
+        // 18446744073709551615.00 <- C value at R = 0
+        // 18446744073754272974.55 <- C value at R = 100
+        // diff is 44721359.55 (but doesn't work)
+        let result =
+            curve.swap_without_fees(100, 0, 1_00000_00000_00000_00000, TradeDirection::AtoB);
+        assert!(result.is_none());
+
+        // as a workaround, we can scale slope and R token amounts (similar to when we give both R and C
+        // extra decimals of precision - more examples in swap_a_to_b_basic too)
+        let curve = LinearPriceCurve {
+            slope_numerator: 1_000_000_000_000_000_000, // slope scaled by 1e18
+            slope_denominator: 10_000_000_000_000, // (obviously we could reduce this slope but just illustrative)
+            initial_token_r_price: 2, // no need to scale this (it's still 50 base RLY for 1 base CC)
+            initial_token_c_price: u64::MAX.into(),
+        };
+
+        // 18446744073709551615.00 <- C value at R = 0
+        // 18446744073714023750.95 <- C value at R = 100_000_000_000_000
+        // diff is 44721359.55 (works now)
+        let result = curve.swap_without_fees(
+            100_000_000_000_000_000_000, // R values also scaled by 1e18
+            0,
+            1_00000_00000_00000_00000,
+            TradeDirection::AtoB,
+        );
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 100_000_000_000_000_000_000,
+                destination_amount_swapped: 44721359 // C value doesn't need any scaling
+            }
+        );
     }
 }

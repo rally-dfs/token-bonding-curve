@@ -937,9 +937,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(source_amount, 7524_521463_020000_000000);
-        assert_eq!(destination_amount, 200_000000); // should floor instead of rounding up to 200
+        assert_eq!(destination_amount, 199_999999); // should floor instead of rounding up to 200
 
-        // TODO: add some tests at the boundaries of u64/u128 to make sure overflow calculations are okay
     }
 
     #[test]
@@ -992,14 +991,18 @@ mod tests {
             .swap_b_to_a(200_000000, 4800_000000, 7296_939463_019977_480000)
             .unwrap();
         assert_eq!(source_amount, 200_000000);
-        assert_eq!(destination_amount, 7296_939463_019977_480000);
+        // note this rounds down due to sqrt rounding, we could get closer to real value of
+        // 7296_939463019977480000 if we pad some precision to sqrt
+        assert_eq!(destination_amount, 7296_939427104235162052);
 
         // put in 200 CC at 14821.4609260237 RLY, should get 7524.5214630093 RLY out
         let (source_amount, destination_amount) = curve
             .swap_b_to_a(200_000000, 4600_000000, 14821_460926_038709_920000)
             .unwrap();
         assert_eq!(source_amount, 200_000000);
-        assert_eq!(destination_amount, 7524521463018732440000);
+        // note this rounds down due to sqrt rounding, we could get closer to real value of
+        // 7524_521463018732440000 if we pad some precision to sqrt
+        assert_eq!(destination_amount, 7524_521425965080122058);
 
         // put in 300 CC at 7296.9394630144 RLY, should get it all out (and only take 200 CC)
         let (source_amount, destination_amount) = curve
@@ -1183,7 +1186,9 @@ mod tests {
             result.unwrap(),
             SwapWithoutFeesResult {
                 source_amount_swapped: u64::MAX.into(),
-                destination_amount_swapped: 31441_34276
+                // note this rounds down even more due to sqrt rounding, we could get closer to real value of
+                // 31441_34276 if we pad some precision to sqrt
+                destination_amount_swapped: 31441_34275
             }
         );
 
@@ -1204,7 +1209,9 @@ mod tests {
             result.unwrap(),
             SwapWithoutFeesResult {
                 source_amount_swapped: 170141183460469231713240559646469521406,
-                destination_amount_swapped: 18446_74406_94145_84319 // floor 19.99 -> 19 instead of 20
+                // note this rounds down due to sqrt rounding, we could get closer to real value of
+                // 18446_74406_94145_84319.99 (floored to 19) if we pad some precision to sqrt
+                destination_amount_swapped: 18446_74406_94145_84318
             }
         );
 
@@ -1236,7 +1243,7 @@ mod tests {
             // note because PreciseNumber only has 12 decimals (and our slope doesn't round evenly
             // to 12 decimals) this is slightly different than the exact amount of
             // 127605887575544883174811079412323188733
-            127605887575544883174811079412323188732 // amount R out = diff between R values
+            127605887575544883165587707373320929277 // amount R out = diff between R values
         );
 
         // now (with actual R numbers above), swap balance is 42535295884924348538429480234146332674
@@ -1258,7 +1265,7 @@ mod tests {
             result.destination_amount_swapped,
             // same note as above - slightly off from exact amount of
             // 31901471903789741091844910984556707842
-            31901471903789741087233224962908094466 // amount R out = diff between R values
+            31901471903789741082621538941259481089 // amount R out = diff between R values
         );
 
         // now (with actual R numbers above), swap balance is 10633823981134607451196255271238238208
@@ -1266,7 +1273,9 @@ mod tests {
         // 0 <- R value at C = c initial
         let result = curve
             .swap_without_fees(
-                23058430091063197696 - (u64::MAX as u128), // amount C in = diff between C values
+                // note due to sqrt rounding this requires a bit more than the actual amount
+                // we could get closer to real value of 23058430091063197694 if we pad some precision to sqrt
+                23058430091063197697 - (u64::MAX as u128), // amount C in = diff between C values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 10633823981134607451196255271238238208,
                 TradeDirection::BtoA,
@@ -1275,7 +1284,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            23058430091063197696 - (u64::MAX as u128)
+            23058430091063197697 - (u64::MAX as u128)
         );
         assert_eq!(
             result.destination_amount_swapped,
@@ -1298,7 +1307,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            23058430091063197696 - (u64::MAX as u128) // should still only take this much C
+            23058430091063197697 - (u64::MAX as u128) // should still only take this much C
         );
         assert_eq!(
             result.destination_amount_swapped,
@@ -1361,6 +1370,24 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 64);
         assert_eq!(
             result.destination_amount_swapped,
+            // note this rounds down due to sqrt rounding, we could get closer to desired behavior
+            // of returning all the token b if we pad some precision to sqrt
+            1162144876643701751908 // amount R out = diff between R values
+        );
+
+        // putting in one extra token b does return all the token a though
+        let result = curve
+            .swap_without_fees(
+                65, // amount C in = diff between C values
+                0,  // this doesn't matter (amt of token b left but we're going the other direction)
+                1180591620717411303424,
+                TradeDirection::BtoA,
+            )
+            .unwrap();
+
+        assert_eq!(result.source_amount_swapped, 65);
+        assert_eq!(
+            result.destination_amount_swapped,
             1180591620717411303424 // amount R out = diff between R values
         );
 
@@ -1383,7 +1410,9 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 32);
         assert_eq!(
             result.destination_amount_swapped,
-            590295810358705654432 // amount R out = diff between R values
+            // note this rounds down due to sqrt rounding, we could get closer to real value of
+            // 590295810358705654432 if we pad some precision to sqrt
+            571849066284996102884 // amount R out = diff between R values
         );
 
         // 590295810358705648992 <- R value at C = 18446744073709551647.00...
@@ -1400,21 +1429,25 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 16);
         assert_eq!(
             result.destination_amount_swapped,
-            295147905179352824624 // amount R out = diff between R values
+            // note this rounds down due to sqrt rounding, we could get closer to real value of
+            // 295147905179352824624 if we pad some precision to sqrt
+            276701161105643273092 // amount R out = diff between R values
         );
 
         // 295147905179352824368 <- R value at C = 18446744073709551631
         // 0 <- R value at C = c initial 18446744073709551615 (u64 MAX)
         let result = curve
             .swap_without_fees(
-                16, // amount C in = diff between C values
+                // note due to sqrt rounding this requires 1 more token b than the actual amount
+                // we could get closer to real value of 16 if we pad some precision to sqrt
+                17, // amount C in = diff between C values
                 0,  // this doesn't matter (amt of token b left but we're going the other direction)
                 295147905179352824368,
                 TradeDirection::BtoA,
             )
             .unwrap();
 
-        assert_eq!(result.source_amount_swapped, 16);
+        assert_eq!(result.source_amount_swapped, 17);
         assert_eq!(
             result.destination_amount_swapped,
             295147905179352824368 // amount R out = diff between R values
@@ -1432,7 +1465,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            16 // should still only take this much C
+            17 // should still only take this much C
         );
         assert_eq!(result.destination_amount_swapped, 295147905179352824368);
     }

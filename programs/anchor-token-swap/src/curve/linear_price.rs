@@ -603,6 +603,26 @@ impl LinearPriceCurve {
     }
 }
 
+/// Returns None iff slope is 0 or close enough to 0 with PreciseNumber
+fn is_slope_valid(curve: &LinearPriceCurve) -> Option<()> {
+    if curve.slope_numerator == 0 || curve.slope_denominator == 0 {
+        return None;
+    };
+
+    // since PreciseNumber only has 12 decimals, any slope < 1e-12 will be treated as 0
+    let numerator = PreciseNumber::new(curve.slope_numerator.into())?;
+    let denominator = PreciseNumber::new(curve.slope_denominator.into())?;
+    let minimum = PreciseNumber::new(1)?.checked_div(&(PreciseNumber::new(1_000_000_000_000)?))?;
+
+    match numerator
+        .checked_div(&denominator)?
+        .greater_than_or_equal(&minimum)
+    {
+        true => Some(()),
+        false => None,
+    }
+}
+
 /// This can be removed once we settle on either the quadratic or bsearch method, just using to triage
 /// between the two methods for now
 impl LinearPriceCurve {
@@ -713,10 +733,9 @@ impl CurveCalculator for LinearPriceCurve {
     /// Validate that the given curve has no invalid parameters
     /// Called on `initialize` - slope must be positive but initial point can be (0,0)
     fn validate(&self) -> Result<(), SwapError> {
-        if self.slope_numerator == 0 || self.slope_denominator == 0 {
-            Err(SwapError::InvalidCurve)
-        } else {
-            Ok(())
+        match is_slope_valid(&self) {
+            Some(_val) => Ok(()),
+            None => Err(SwapError::InvalidCurve),
         }
     }
 
@@ -1699,6 +1718,45 @@ mod tests {
             1519000000000000 // should still only take this much C
         );
         assert_eq!(result.destination_amount_swapped, 1152922643427762284);
+    }
+
+    #[test]
+    fn swap_is_slope_valid() {
+        // 0 should be Err
+        let curve = LinearPriceCurve {
+            slope_numerator: 0,
+            slope_denominator: 1_000_000_000_001,
+            initial_token_r_price: 1,
+            initial_token_c_price: 1,
+        };
+        assert!(!curve.validate().is_ok());
+
+        // undef should be Err
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 0,
+            initial_token_r_price: 1,
+            initial_token_c_price: 1,
+        };
+        assert!(!curve.validate().is_ok());
+
+        // less than 1e-12 should be Err
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 1_000_000_000_001,
+            initial_token_r_price: 1,
+            initial_token_c_price: 1,
+        };
+        assert!(!curve.validate().is_ok());
+
+        // 1e-12 should be Ok
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 1_000_000_000_000,
+            initial_token_r_price: 1,
+            initial_token_c_price: 1,
+        };
+        assert!(curve.validate().is_ok());
     }
 
     #[test]

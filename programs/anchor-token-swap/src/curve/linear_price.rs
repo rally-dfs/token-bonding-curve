@@ -82,19 +82,34 @@ fn solve_quadratic_positive_root(
         false => b_squared.checked_sub(&four_a_c_abs_value)?, // we're going to sqrt this so no need for unsigned_sub
     };
 
-    let sqrt_b2_minus_4ac_raw;
+    let sqrt_b2_minus_4ac;
     if b2_minus_4ac.less_than(&(PreciseNumber::new(1)?)) {
         // PreciseNumber's out of the box sqrt is too inaccurate for numbers < 1, add as many
         // decimals as we can fit into u128 (12 max from PreciseNumber + 26) and then do it manually
         // TODO: this would be cleaner if we also encapsulated it into DFSPreciseNumber.sqrt
-        let b2_minus_4ac_value =
+        let b2_minus_4ac_padded =
             b2_minus_4ac.checked_mul(&(PreciseNumber::new(100_0000_0000_0000_0000_0000_0000)?))?;
-        let b2_minus_4ac_value_u128 = b2_minus_4ac_value.to_imprecise()?;
-        let sqrt_b2_minus_4ac_value_u128 = sqrt_babylonian(b2_minus_4ac_value_u128)?;
+        let b2_minus_4ac_padded_u128 = b2_minus_4ac_padded.to_imprecise()?;
+        let sqrt_b2_minus_4ac_padded_u128 = sqrt_babylonian(b2_minus_4ac_padded_u128)?;
 
-        // convert back to PreciseNumber and divide result by 13 decimals
-        sqrt_b2_minus_4ac_raw = PreciseNumber::new(sqrt_b2_minus_4ac_value_u128)?
+        let sqrt_b2_minus_4ac_padded_unrounded = PreciseNumber::new(sqrt_b2_minus_4ac_padded_u128)?;
+
+        // unpad by dividing result by 13 decimals
+        let sqrt_b2_minus_4ac_unrounded = sqrt_b2_minus_4ac_padded_unrounded
             .checked_div(&(PreciseNumber::new(10_0000_0000_0000)?))?;
+
+        let is_not_perfect_square = sqrt_b2_minus_4ac_padded_unrounded
+            .checked_mul(&sqrt_b2_minus_4ac_padded_unrounded)?
+            .less_than(&b2_minus_4ac_padded);
+
+        // make sure to round up if we're supposed to (since all these numbers are < 1, this means rounding up
+        // the last digit of PreciseNumber's 12 decimals)
+        let last_digit =
+            PreciseNumber::new(1)?.checked_div(&(PreciseNumber::new(1_0000_0000_0000)?))?;
+        sqrt_b2_minus_4ac = match should_round_sqrt_up && is_not_perfect_square {
+            true => sqrt_b2_minus_4ac_unrounded.checked_add(&last_digit)?,
+            false => sqrt_b2_minus_4ac_unrounded,
+        };
     } else {
         // note we have to use u128 sqrt since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
         let b2_minus_4ac_u128 =
@@ -105,18 +120,18 @@ fn solve_quadratic_positive_root(
                 false => return None,
             };
         let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
-        sqrt_b2_minus_4ac_raw = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
-    }
+        let sqrt_b2_minus_4ac_unrounded = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
 
-    // make sure to add 1 if we're supposed to round up (and it wasn't a perfect square)
-    let sqrt_b2_minus_4ac = match should_round_sqrt_up
-        && sqrt_b2_minus_4ac_raw
-            .checked_mul(&sqrt_b2_minus_4ac_raw)?
-            .less_than(&b2_minus_4ac)
-    {
-        true => sqrt_b2_minus_4ac_raw.checked_add(&(PreciseNumber::new(1)?))?,
-        false => sqrt_b2_minus_4ac_raw,
-    };
+        let is_not_perfect_square = sqrt_b2_minus_4ac_unrounded
+            .checked_mul(&sqrt_b2_minus_4ac_unrounded)?
+            .less_than(&b2_minus_4ac);
+
+        // make sure to add 1 if we're supposed to round up (and it wasn't a perfect square)
+        sqrt_b2_minus_4ac = match should_round_sqrt_up && is_not_perfect_square {
+            true => sqrt_b2_minus_4ac_unrounded.checked_add(&(PreciseNumber::new(1)?))?,
+            false => sqrt_b2_minus_4ac_unrounded,
+        };
+    }
 
     // numerator is sqrt(b^2-4ac) - b
     let numerator = match b_is_negative {
@@ -1834,5 +1849,121 @@ mod tests {
                 destination_amount_swapped: 44721359 // C value doesn't need any scaling
             }
         );
+    }
+
+    /// Tests swapping the minimum amount of tokens at a time (e.g. 1) in a loop from 0 to max and
+    /// then back to 0, making sure there's no rounding arbitrage opportunities. Useful for sanity checking
+    /// specific swap steps for a specific curve (e.g. one about to be created on mainnet)
+    #[test]
+    fn minimum_token_exchange_rounding() {
+        let curve = LinearPriceCurve {
+            slope_numerator: 1,
+            slope_denominator: 1_000_000_000_000,
+            initial_token_r_price: 0,
+            initial_token_c_price: 0,
+        };
+        let starting_supply_b: u128 = 10_000_000;
+        // swap at least `step` tokens at a time, can tweak this if it takes a lot of token a to get out 1 token b
+        // (would be even better to use something analogous to the next_b_value/current_b_value that we use below)
+        let step = 1;
+
+        let mut swap_supply_a = 0;
+        let mut swap_supply_b: u128 = starting_supply_b.into();
+
+        while swap_supply_b > 0 {
+            let mut amount_a = step;
+            loop {
+                let result = curve.swap_without_fees(
+                    amount_a,
+                    swap_supply_a,
+                    swap_supply_b,
+                    TradeDirection::AtoB,
+                );
+
+                if result.is_some() {
+                    let SwapWithoutFeesResult {
+                        source_amount_swapped,
+                        destination_amount_swapped,
+                    } = result.unwrap();
+                    swap_supply_a += source_amount_swapped;
+                    swap_supply_b -= destination_amount_swapped;
+
+                    msg!(
+                        "Swapped {:?} token a (bal {:?}) for {:?} token b (bal {:?})",
+                        source_amount_swapped,
+                        swap_supply_a,
+                        destination_amount_swapped,
+                        swap_supply_b,
+                    );
+                    break;
+                } else {
+                    // if result was none, there wasn't enough a token to get out any b, so try a bit more
+                    amount_a += step;
+                }
+            }
+        }
+
+        // at this point, swap has 0 b and has taken in `swap_supply_a` amount of token a
+        assert!(swap_supply_b == 0);
+        assert!(swap_supply_a > 0);
+
+        // now swap all the way back from b to a
+        while swap_supply_a > 0 {
+            // usually (for small slope curves), it takes a lot of b to get back 1 a,
+            // so just precalculate a reasonable starting point instead of starting from 1
+            let current_b_value = curve
+                .c_value_with_amt_r_locked_quadratic(
+                    &(PreciseNumber::new(swap_supply_a).unwrap()),
+                    false,
+                )
+                .unwrap()
+                .to_imprecise()
+                .unwrap();
+
+            let next_b_value = curve
+                .c_value_with_amt_r_locked_quadratic(
+                    &(PreciseNumber::new(swap_supply_a - 1).unwrap()),
+                    true,
+                )
+                .unwrap()
+                .to_imprecise()
+                .unwrap();
+
+            let mut amount_b = current_b_value - next_b_value - 10;
+            loop {
+                let result = curve.swap_without_fees(
+                    amount_b,
+                    swap_supply_b,
+                    swap_supply_a,
+                    TradeDirection::BtoA,
+                );
+
+                if result.is_some() {
+                    let SwapWithoutFeesResult {
+                        source_amount_swapped,
+                        destination_amount_swapped,
+                    } = result.unwrap();
+                    swap_supply_b += source_amount_swapped;
+                    swap_supply_a -= destination_amount_swapped;
+
+                    msg!(
+                        "Swapped {:?} token b (bal {:?}) for {:?} token a (bal {:?})",
+                        source_amount_swapped,
+                        swap_supply_b,
+                        destination_amount_swapped,
+                        swap_supply_a,
+                    );
+                    break;
+                } else {
+                    // if result was none, there wasn't enough a token to get out any b, so try a bit more
+                    amount_b += step;
+                }
+            }
+        }
+
+        // make sure some user can't get out all the a while making a profit on b, i.e.
+        // the swap should now have more b in it than we started with
+        assert!(swap_supply_a == 0);
+        assert!(swap_supply_b >= starting_supply_b);
     }
 }

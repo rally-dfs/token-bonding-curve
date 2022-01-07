@@ -1829,4 +1829,78 @@ mod tests {
             }
         }
     }
+
+    /// Sanity check tests for solve_quadratic_positive_root helper function
+    #[test]
+    fn solve_quadratic_positive_root_cases() {
+        // single root x^2 - 10x + 25 -> x = 5
+        let result = solve_quadratic_positive_root(
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(10).unwrap()),
+            true,
+            &(PreciseNumber::new(25).unwrap()),
+            false,
+            true,
+        )
+        .unwrap()
+        .to_imprecise()
+        .unwrap();
+        assert_eq!(result, 5);
+
+        // no real roots x^2 - 3x + 4
+        let result = solve_quadratic_positive_root(
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(3).unwrap()),
+            true,
+            &(PreciseNumber::new(4).unwrap()),
+            false,
+            true,
+        );
+        assert!(result.is_none());
+
+        // two roots both positive x^2 - 7x + 8, x = ~1.4 and ~5.6
+        let result = solve_quadratic_positive_root(
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(7).unwrap()),
+            true,
+            &(PreciseNumber::new(8).unwrap()),
+            false,
+            true,
+        )
+        .unwrap()
+        .to_imprecise()
+        .unwrap();
+        assert_eq!(result, 6); // should return greater root and round up
+
+        // two roots both negative x^2 + 8x + 12, x = -2 and -6
+        let result = solve_quadratic_positive_root(
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(7).unwrap()),
+            false,
+            &(PreciseNumber::new(8).unwrap()),
+            false,
+            true,
+        );
+
+        assert!(result.is_none());
+
+        // two roots one positive one negative x^2 - 25, x = -5 and 5
+        let result = solve_quadratic_positive_root(
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(1).unwrap()),
+            &(PreciseNumber::new(0).unwrap()),
+            false,
+            &(PreciseNumber::new(25).unwrap()),
+            true,
+            true,
+        )
+        .unwrap()
+        .to_imprecise()
+        .unwrap();
+        assert_eq!(result, 5); // should return positive root
+    }
 }

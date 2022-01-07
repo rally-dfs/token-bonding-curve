@@ -3,7 +3,8 @@
 //! Deposits (except the initial deposit) are disabled
 //! The initial deposit should only have token B (the bonded token) and 0 token A (the collateral token)
 //! This curve only works with fees set to 0 (process_swap will panic otherwise)
-//! Withdrawals are disabled (maybe we can add in a check to enable it in emergencies?), TODO: this isn't implemented yet though
+//! Withdrawals are disabled (maybe we can add in a check to enable it in emergencies?), will panic if those
+//! instructions are called
 
 use {
     crate::{
@@ -63,8 +64,6 @@ fn solve_quadratic_positive_root(
     c_is_negative: bool,
     should_round_sqrt_up: bool,
 ) -> Option<PreciseNumber> {
-    // TODO: should write some tests for this
-
     // solve x = (-b + sqrt(b^2 - 4ac)) / 2a
 
     // a * 4 * c
@@ -179,7 +178,6 @@ impl LinearPriceCurve {
         PreciseNumber, // i0 abs value
         bool,          // i0 is negative
     )> {
-
         let slope_numerator = PreciseNumber::new(self.slope_numerator.into())?;
         let slope_denominator = PreciseNumber::new(self.slope_denominator.into())?;
         let r0 = PreciseNumber::new(self.initial_token_r_price.into())?;
@@ -356,9 +354,8 @@ impl LinearPriceCurve {
         // quadratic formula version:
         let r_start = PreciseNumber::new(swap_source_amount)?;
 
-        // TODO: two sqrt calls is pretty expensive (50K each), we could potentially optimize this by storing the initial deposit amount on chain and inferring c_start from that?
-        // e.g c_start = initial_deposit_amount - swap_destination_amount (obviously only works if we disallow non-init deposits, and requires a lot of threading)
         let c_start = self.c_value_with_amt_r_locked_quadratic(&r_start, true)?;
+
         match self.maximum_a_remaining_for_swap_a_to_b(
             &c_start,
             &r_start,
@@ -372,6 +369,7 @@ impl LinearPriceCurve {
 
         // otherwise, there's enough C tokens for all the R they put in, find the c_end value for the amount of R they're putting in and give them `c_end - c_start` tokens out
         let r_end = r_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
+
         let c_end = self.c_value_with_amt_r_locked_quadratic(&r_end, false)?;
 
         let difference = c_end.checked_sub(&c_start)?;
@@ -392,6 +390,7 @@ impl LinearPriceCurve {
         // note this only works if non-init deposits are disabled (and maybe if the initial deposit didn't have any token A in it?),
         // otherwise there could be some A token in the pool that isn't part of the bonding curve
 
+        // make sure we round up here so that c_end and r_end are also over-estimated, which rounds down the final token a output
         let c_start = self.c_value_with_amt_r_locked_quadratic(
             &(PreciseNumber::new(swap_destination_amount)?),
             true,
@@ -487,11 +486,11 @@ impl CurveCalculator for LinearPriceCurve {
     /// withdraw_all_token_types burns (given a min limit of A and B)
     fn pool_tokens_to_trading_tokens(
         &self,
-        pool_tokens: u128,
-        pool_token_supply: u128,
-        swap_token_r_amount: u128,
-        swap_token_c_amount: u128,
-        round_direction: RoundDirection,
+        _pool_tokens: u128,
+        _pool_token_supply: u128,
+        _swap_token_r_amount: u128,
+        _swap_token_c_amount: u128,
+        _round_direction: RoundDirection,
     ) -> Option<TradingTokenResult> {
         // this causes a panic if withdraw_all_token_types is called but that's ok for now, cheap way of
         // disabling withdrawals without having to change how SwapCurve works
@@ -510,11 +509,11 @@ impl CurveCalculator for LinearPriceCurve {
     /// how much pool token to mint (given a trading token amount and a minimum_pool_token_rmount)
     fn deposit_single_token_type(
         &self,
-        source_amount: u128,
-        swap_token_r_amount: u128,
-        swap_token_c_amount: u128,
-        pool_supply: u128,
-        trade_direction: TradeDirection,
+        _source_amount: u128,
+        _swap_token_r_amount: u128,
+        _swap_token_c_amount: u128,
+        _pool_supply: u128,
+        _trade_direction: TradeDirection,
     ) -> Option<u128> {
         // this never gets called since allows_withdrawals is false (would panic otherwise so still safe)
         None
@@ -526,11 +525,11 @@ impl CurveCalculator for LinearPriceCurve {
     /// how much pool token to mint (to account for fees) into the various fee accounts
     fn withdraw_single_token_type_exact_out(
         &self,
-        source_amount: u128,
-        swap_token_r_amount: u128,
-        swap_token_c_amount: u128,
-        pool_supply: u128,
-        trade_direction: TradeDirection,
+        _source_amount: u128,
+        _swap_token_r_amount: u128,
+        _swap_token_c_amount: u128,
+        _pool_supply: u128,
+        _trade_direction: TradeDirection,
     ) -> Option<u128> {
         // this causes a panic if SwapCurve.withdraw_single_token_type_exact_out instruction is called
         // but that's ok for now, cheap way of disabling withdrawals without having to change how SwapCurve works
@@ -622,22 +621,15 @@ impl DynPack for LinearPriceCurve {
         *slope_denominator = self.slope_denominator.to_le_bytes();
         let initial_token_r_price = array_mut_ref![output, 16, 8];
         *initial_token_r_price = self.initial_token_r_price.to_le_bytes();
-        let initial_token_c_price = array_mut_ref![output, 24, 8];
-        *initial_token_c_price = self.initial_token_c_price.to_le_bytes();
+        let initial_token_b_value = array_mut_ref![output, 24, 8];
+        *initial_token_b_value = self.initial_token_b_value.to_le_bytes();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::calculator::{
-        test::{
-            check_curve_value_from_swap, check_deposit_token_conversion,
-            check_withdraw_token_conversion, total_and_intermediate,
-            CONVERSION_BASIS_POINTS_GUARANTEE,
-        },
-        INITIAL_SWAP_POOL_AMOUNT,
-    };
+    use crate::curve::calculator::test::check_curve_value_from_swap;
     use proptest::prelude::*;
 
     #[test]
@@ -734,7 +726,6 @@ mod tests {
             .unwrap();
         assert_eq!(source_amount, 7524_521463_020000_000000);
         assert_eq!(destination_amount, 199_999999); // should floor instead of rounding up to 200
-
     }
 
     #[test]
@@ -806,7 +797,10 @@ mod tests {
             .unwrap();
         assert_eq!(source_amount, 200_000000);
         assert_eq!(destination_amount, 7296_939463_019977_480000);
+    }
 
+    #[test]
+    fn swap_0_0_curve() {
         // a curve that starts at 0/0
         let curve = LinearPriceCurve {
             slope_numerator: 1,
@@ -814,6 +808,11 @@ mod tests {
             initial_token_r_price: 0,
             initial_token_c_price: 0,
         };
+
+        // put in 9 RLY, should get 6 CC out
+        let (source_amount, destination_amount) = curve.swap_a_to_b(9, 0, 5000).unwrap();
+        assert_eq!(source_amount, 9);
+        assert_eq!(destination_amount, 6);
 
         // put in 6 CC at 9 RLY, should get all 9 RLY out
         let (source_amount, destination_amount) = curve.swap_b_to_a(6, 494, 9).unwrap();
@@ -882,7 +881,10 @@ mod tests {
     }
 
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
-    /// some example curves with large numbers (and make sure they return None instead of something crazy)
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// Summary: when initial_token_r_price == u64::MAX, these curves are all useless (regardless of the other
+    /// parameters) - it will overflow before any a tokens are accepted
     #[test]
     fn swap_large_price_max_r() {
         // curve with everything near u64::MAX
@@ -890,6 +892,10 @@ mod tests {
             slope_numerator: u64::MAX,
             slope_denominator: u64::MAX - 1,
             initial_token_r_price: u64::MAX,
+            // in general for all these swap_large tests, initial C doesn't affect any calculations (it just
+            // determines the initial offset and gets subtracted out at the end), i.e. C inputs/outputs to
+            // swap_without_fees don't change if we change this to 0. just using max here just to check it
+            // doesn't introduce rounding issues
             initial_token_c_price: u64::MAX,
         };
 
@@ -953,7 +959,10 @@ mod tests {
     }
 
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
-    /// some example curves with large numbers (and make sure they return None instead of something crazy)
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// Summary: with a pretty high initial_token_r_price at u32::MAX, we overflow at around 2^127 token a swapped
+    /// in, which won't ever be an issue (SPL maxes out at 2^64 supply). See swap_large_price_almost_max_r also
     #[test]
     fn swap_large_price_r_u32() {
         // example curve with R price relatively low and everything else high
@@ -1108,7 +1117,10 @@ mod tests {
     }
 
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
-    /// some example curves with large numbers (and make sure they return None instead of something crazy)
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// Summary: with a very high initial_token_r_price at u64::MAX - 100, we overflow at around 2^70 token a swapped
+    /// in, which won't ever be an issue (SPL maxes out at 2^64 supply).
     #[test]
     fn swap_large_price_almost_max_r() {
         // example curve with R price a little lower than u64 MAX and everything else high
@@ -1262,7 +1274,10 @@ mod tests {
     }
 
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
-    /// some example curves with large numbers (and make sure they return None instead of something crazy)
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// Summary: with a very low slope, overflow isn't an issue, though often times rounding and PreciseNumber's
+    /// limit of 12 decimals of precision will cause rounding well below the exact solution
     #[test]
     fn swap_large_price_low_slope_u128() {
         // example curve with lowest possible slope and 0 starting R price (costs very little R to get a lot of C out)
@@ -1410,8 +1425,10 @@ mod tests {
     }
 
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
-    /// some example curves with large numbers (and make sure they return None instead of something crazy)
-    /// This is similar to swap_large_price_low_slope_u128 but with a more realistic curve
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// This is similar to swap_large_price_low_slope_u128 but with a more realistic curve (initial_token_c_price is
+    /// 0 instead of u64::MAX)
     #[test]
     fn swap_large_price_low_slope_u64() {
         // same curve as above but we only use u64 values (realistically that's the maximum unless SPL
@@ -1544,6 +1561,7 @@ mod tests {
         assert_eq!(result.destination_amount_swapped, 1152922643427762284);
     }
 
+    /// Tests curve.validate() will reject invalid curves
     #[test]
     fn swap_is_slope_valid() {
         // 0 should be Err
@@ -1583,6 +1601,8 @@ mod tests {
         assert!(curve.validate().is_ok());
     }
 
+    /// Gives example of how to work around slopes < 1e-12
+    /// See swap_large_price_low_slope_u128 for more context
     #[test]
     fn swap_too_low_slope_workaround_example() {
         // note this is treated as 0 since the slope is < 1e-12
@@ -1664,13 +1684,14 @@ mod tests {
                     swap_supply_a += source_amount_swapped;
                     swap_supply_b -= destination_amount_swapped;
 
-                    msg!(
-                        "Swapped {:?} token a (bal {:?}) for {:?} token b (bal {:?})",
-                        source_amount_swapped,
-                        swap_supply_a,
-                        destination_amount_swapped,
-                        swap_supply_b,
-                    );
+                    // uncomment to see every token step:
+                    // msg!(
+                    //     "Swapped {:?} token a (bal {:?}) for {:?} token b (bal {:?})",
+                    //     source_amount_swapped,
+                    //     swap_supply_a,
+                    //     destination_amount_swapped,
+                    //     swap_supply_b,
+                    // );
                     break;
                 } else {
                     // if result was none, there wasn't enough a token to get out any b, so try a bit more
@@ -1722,13 +1743,14 @@ mod tests {
                     swap_supply_b += source_amount_swapped;
                     swap_supply_a -= destination_amount_swapped;
 
-                    msg!(
-                        "Swapped {:?} token b (bal {:?}) for {:?} token a (bal {:?})",
-                        source_amount_swapped,
-                        swap_supply_b,
-                        destination_amount_swapped,
-                        swap_supply_a,
-                    );
+                    // uncomment to see every token step:
+                    // msg!(
+                    //     "Swapped {:?} token b (bal {:?}) for {:?} token a (bal {:?})",
+                    //     source_amount_swapped,
+                    //     swap_supply_b,
+                    //     destination_amount_swapped,
+                    //     swap_supply_a,
+                    // );
                     break;
                 } else {
                     // if result was none, there wasn't enough a token to get out any b, so try a bit more

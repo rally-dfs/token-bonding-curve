@@ -779,30 +779,18 @@ impl CurveCalculator for LinearPriceCurve {
         false
     }
 
-    /// The total normalized value of the constant price curve adds the total
-    /// value of the token B side to the token A side.
-    /// TODO: i think this is just used in tests
+    /// The total normalized value of the linear price curve adds the total
+    /// value of the token A side (as denominated in token B) to the token B side.
     fn normalized_value(
         &self,
         swap_token_r_amount: u128,
         swap_token_c_amount: u128,
     ) -> Option<PreciseNumber> {
-        None
-        // TODO: this is constant curve impl:
-        // let swap_token_c_value = swap_token_c_amount.checked_mul(self.token_c_price as u128)?;
-        // // special logic in case we're close to the limits, avoid overflowing u128
-        // let value = if swap_token_c_value.saturating_sub(std::u64::MAX.into())
-        //     > (std::u128::MAX.saturating_sub(std::u64::MAX.into()))
-        // {
-        //     swap_token_c_value
-        //         .checked_div(2)?
-        //         .checked_add(swap_token_r_amount.checked_div(2)?)?
-        // } else {
-        //     swap_token_r_amount
-        //         .checked_add(swap_token_c_value)?
-        //         .checked_div(2)?
-        // };
-        // PreciseNumber::new(value)
+        let c_value_of_r = self.c_value_with_amt_r_locked_quadratic(
+            &(PreciseNumber::new(swap_token_r_amount)?),
+            false,
+        )?;
+        return Some(c_value_of_r.checked_add(&(PreciseNumber::new(swap_token_c_amount)?))?);
     }
 }
 
@@ -1965,5 +1953,92 @@ mod tests {
         // the swap should now have more b in it than we started with
         assert!(swap_supply_a == 0);
         assert!(swap_supply_b >= starting_supply_b);
+    }
+
+    // TODO: there's a bunch of withdraw/deposit tests from constant_curve that we could write a version of if we
+    // enable those, e.g. curve_value_does_not_decrease_from_withdraw/deposit, deposit_token_conversion_b_to_a/b_to_a,
+    // withdraw_token_conversion
+
+    proptest! {
+        #[test]
+        fn curve_value_does_not_decrease_from_swap_a_to_b(
+            // how much a user is swapping in
+            source_token_amount in 1..u64::MAX,
+            // how much a is already in swap (determines spot price), for a low slope curve we might overflow
+            // if we go all the way to u64::MAX
+            swap_source_amount in 1..u32::MAX,
+        ) {
+            // Kind of complicated to check overflow/underflow if we try to also make these parameterized in proptest
+            // (and we'd basically be using the functions we're trying to test to do those prop_assume checks, so
+            // kind of pointless), probably just makes sense to run this test on a specific curve to sanity check it
+            // (and tweak the source_token_amount/swap_source_amount ranges to not overflow)
+            let curve = LinearPriceCurve {
+                slope_numerator: 1,
+                slope_denominator: 1_000_000_000_000,
+                initial_token_r_price: 0,
+                initial_token_c_price: 0,
+            };
+
+            let (_source_amount_swapped, destination_amount_swapped) = curve
+                .swap_a_to_b(
+                    source_token_amount as u128,
+                    swap_source_amount as u128,
+                    u64::MAX as u128,
+                )
+                .unwrap();
+
+            // ignore the trades where not enough source_token_amount was put in to get any b out
+            if destination_amount_swapped > 0 {
+                check_curve_value_from_swap(
+                    &curve,
+                    source_token_amount as u128,
+                    swap_source_amount as u128,
+                    // swap_destination_amount (the amount of token b in the swap) doesn't affect any of the math so
+                    // no need to parameterize it, it would just introduces extra prop_assume checks at the top)
+                    u64::MAX as u128,
+                    TradeDirection::AtoB
+                );
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn curve_value_does_not_decrease_from_swap_b_to_a(
+            // how much b user is swapping in
+            source_token_amount in 1..u64::MAX,
+            // how much a is already in swap (determines spot price), for a low slope curve we might overflow
+            // if we go all the way to u64::MAX
+            swap_destination_amount in 1..u32::MAX,
+        ) {
+            // Same as above - too complicated to parametrize all these in proptest
+            let curve = LinearPriceCurve {
+                slope_numerator: 1,
+                slope_denominator: 1_000_000_000_000,
+                initial_token_r_price: 0,
+                initial_token_c_price: 0,
+            };
+
+            let (_source_amount_swapped, destination_amount_swapped) = curve
+                .swap_b_to_a(
+                    source_token_amount as u128,
+                    u64::MAX as u128,
+                    swap_destination_amount as u128,
+                )
+                .unwrap();
+
+            // ignore the trades where not enough source_token_amount was put in to get any a out
+            if destination_amount_swapped > 0 {
+                check_curve_value_from_swap(
+                    &curve,
+                    source_token_amount as u128,
+                    // swap_source_amount (the amount of token b in the swap) doesn't affect any of the math so
+                    // no need to parameterize it, it would just introduces extra prop_assume checks at the top)
+                    u64::MAX as u128,
+                    swap_destination_amount as u128,
+                    TradeDirection::BtoA
+                );
+            }
+        }
     }
 }

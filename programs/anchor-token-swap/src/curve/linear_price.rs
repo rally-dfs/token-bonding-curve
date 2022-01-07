@@ -343,7 +343,7 @@ impl LinearPriceCurve {
 
     /// Swap's in user's collateral token and returns out the bonded token,
     /// moving right on the price curve and increasing the price of the bonded token
-    fn swap_a_to_b_quadratic(
+    fn swap_a_to_b(
         &self,
         source_amount: u128,      // amount of user's token a (collateral token)
         swap_source_amount: u128, // swap's token a (collateral token)
@@ -382,7 +382,7 @@ impl LinearPriceCurve {
         Some((source_amount, destination_amount))
     }
 
-    fn swap_b_to_a_quadratic(
+    fn swap_b_to_a(
         &self,
         source_amount: u128,
         _swap_source_amount: u128,
@@ -427,192 +427,7 @@ impl LinearPriceCurve {
             .floor()?
             .to_imprecise()?;
 
-        Some((source_amount, destination_amount))
-    }
-}
 
-/// These functions use the square + triangle area geometry formula to determine R liquidity between 2 given
-/// C values (amt_r_locked_between_c_values_precise)
-/// It then uses that to perform binary search to determine C value for a given amount of R
-/// liquidity (c_value_with_amt_r_locked_bsearch_u128)
-///
-/// swap_a_to_b_bsearch and swap_b_to_a_bsearch are the key functions at the bottom
-/// the area calculation for C -> R uses PreciseNumber but the binary search for R -> C uses u128 (otherwise
-/// we run out of compute)
-///
-/// Haven't figured out a way to get both precise enough and low compute enough yet - this currently either
-/// fails the anchor tests with not enough compute (if we use PreciseNumber for area calculation) or it
-/// fails the rust tests (if we use u128 for area calculation)
-impl LinearPriceCurve {
-    /// Calculates the area (amount of token R locked) under the curve between c_start and c_end
-    /// In cases where we overflow PreciseNumber, we just return u128::MAX (the total amount of R
-    /// can't exceed this anyway, and it's a little more useful to return Some value instead of None
-    /// for the binary search)
-    fn amt_r_locked_between_c_values_precise(
-        &self,
-        c_start: &PreciseNumber,
-        c_end: &PreciseNumber,
-    ) -> Option<PreciseNumber> {
-        // TODO: write some tests for this
-
-        let slope_numerator = PreciseNumber::new(self.slope_numerator.into())?;
-        let slope_denominator = PreciseNumber::new(self.slope_denominator.into())?;
-        let m = slope_numerator.checked_div(&slope_denominator)?;
-        let r0 = PreciseNumber::new(self.initial_token_r_price.into())?;
-        let c0 = PreciseNumber::new(self.initial_token_c_price.into())?;
-
-        let r_start = m
-            .checked_mul(&(c_start.checked_sub(&c0)?))?
-            .checked_add(&r0)?;
-        let r_end = m
-            .checked_mul(&(c_end.checked_sub(&c0)?))?
-            .checked_add(&r0)?;
-
-        let r_delta = r_end.checked_sub(&r_start)?;
-        let c_delta = c_end.checked_sub(&c_start)?;
-
-        let square_area = c_delta.checked_mul(&r_start)?;
-
-        let triangle_area = c_delta
-            .checked_div(&(PreciseNumber::new(2))?)?
-            .checked_mul(&r_delta)?;
-
-        square_area.checked_add(&triangle_area)
-    }
-
-    // TODO: this doesn't have enough precision, we're overflowing u128 too often (e.g. even on the r_end slope calculation)
-    // /// Calculates the area (amount of token R locked) under the curve between c_start and c_end
-    fn amt_r_locked_between_c_values_u128(&self, c_start: u128, c_end: u128) -> Option<u128> {
-        // TODO: write some tests for this
-
-        let r_start = (self.slope_numerator as u128)
-            .checked_mul(c_start.checked_sub(self.initial_token_c_price.into())?)?
-            .checked_div(self.slope_denominator.into())?
-            .checked_add(self.initial_token_r_price.into())?;
-        let r_end_num = (self.slope_numerator as u128)
-            .checked_mul(c_end.checked_sub(self.initial_token_c_price.into())?)?;
-        let r_end = r_end_num
-            .checked_div(self.slope_denominator.into())?
-            .checked_add(self.initial_token_r_price.into())?;
-
-        let r_delta = r_end.checked_sub(r_start)?;
-        let c_delta = c_end.checked_sub(c_start)?;
-
-        let square_area = c_delta.checked_mul(r_start)?;
-        let triangle_area = c_delta.checked_div(2)?.checked_mul(r_delta)?;
-
-        square_area.checked_add(triangle_area)
-    }
-
-    fn c_value_with_amt_r_locked_bsearch_u128(
-        &self,
-        r_amt_target: u128,
-        c_lower_bound: u128,
-        c_upper_bound: u128,
-    ) -> Option<u128> {
-        let c0 = PreciseNumber::new(self.initial_token_c_price.into())?;
-
-        let mut min = c_lower_bound;
-        let mut max = c_upper_bound;
-
-        while min <= max {
-            let cur_c = min.checked_add(max)?.checked_div(2)?;
-
-            // TODO: not sure if we can make this work to be both precise and compute-cheap enough
-            // this runs out of compute for anchor-token-swap.ts
-            // let cur_r_locked = self.amt_r_locked_between_c_values_precise(
-            //     &(PreciseNumber::new(self.initial_token_c_price.into())?),
-            //     &(PreciseNumber::new(cur_c)?),
-            // )?;
-
-            // this fails our rust tests, not precise enough
-            let cur_r_locked =
-                self.amt_r_locked_between_c_values_u128(self.initial_token_c_price.into(), cur_c)?;
-
-            if r_amt_target == cur_r_locked {
-                return Some(cur_c);
-            } else if r_amt_target > cur_r_locked {
-                min = cur_c.checked_add(1)?;
-            } else if r_amt_target < cur_r_locked {
-                max = cur_c.checked_sub(1)?;
-            }
-        }
-
-        // TODO: just placeholder, handle if target is outside of lower/upper bounds
-        Some(min)
-    }
-
-    fn swap_a_to_b_bsearch(
-        &self,
-        source_amount: u128,
-        swap_source_amount: u128,
-        swap_destination_amount: u128,
-    ) -> Option<(u128, u128)> {
-        // use swap_source_amount (collateral token) to determine where we are on the integration curve
-        // note this only works if non-init deposits are disabled (and maybe if the initial deposit didn't have any token A in it?),
-        // otherwise there could be some A token in the pool that isn't part of the bonding curve
-
-        // swap_source_amt = (c_start - c0) * r0 + triangle area
-        // so swap_source_amt >= (c_start - c0) * r0
-        // so c_start <= swap_source_amt/r0 + c0
-        let c_start_upper_bound =
-            match swap_source_amount.checked_div(self.initial_token_r_price.into()) {
-                Some(val) => val.checked_add(self.initial_token_c_price.into())?,
-                // TODO: is this okay? probably will run out of compute - what's a better fallback?
-                None => u128::MAX.checked_sub(self.initial_token_c_price.into())?,
-            };
-
-        let c_start = self.c_value_with_amt_r_locked_bsearch_u128(
-            swap_source_amount,
-            self.initial_token_c_price.into(),
-            c_start_upper_bound,
-        )?;
-        let c_end = self.c_value_with_amt_r_locked_bsearch_u128(
-            swap_source_amount.checked_add(source_amount)?,
-            c_start,
-            c_start.checked_add(swap_destination_amount)?, // swap_destination_amount + c_start is the most the pool can give out
-        )?;
-
-        let destination_amount = c_end.checked_sub(c_start)?;
-
-        // TODO: need to handle rounding up/down, especially if not all the source_amount will be used (i.e. there's not enough swap_destination_amount)
-
-        Some((source_amount, destination_amount))
-    }
-
-    fn swap_b_to_a_bsearch(
-        &self,
-        source_amount: u128,
-        _swap_source_amount: u128,
-        swap_destination_amount: u128,
-    ) -> Option<(u128, u128)> {
-        // use swap_destination_amount (collateral token) to determine where we are on the integration curve
-        // note this only works if non-init deposits are disabled (and maybe if the initial deposit didn't have any token A in it?),
-        // otherwise there could be some A token in the pool that isn't part of the bonding curve
-
-        let c_start_upper_bound =
-            match swap_destination_amount.checked_div(self.initial_token_r_price.into()) {
-                Some(val) => val.checked_add(self.initial_token_c_price.into())?,
-                // TODO: is this okay? probably will run out of compute - what's a better fallback?
-                None => u128::MAX.checked_sub(self.initial_token_c_price.into())?,
-            };
-
-        let c_start = self.c_value_with_amt_r_locked_bsearch_u128(
-            swap_destination_amount,
-            self.initial_token_c_price.into(),
-            c_start_upper_bound,
-        )?;
-        let c_end = c_start.checked_sub(source_amount)?;
-
-        // we should have enough compute to at least use PreciseNumber geometry here
-        let destination_amount = self
-            .amt_r_locked_between_c_values_precise(
-                &(PreciseNumber::new(c_end)?),
-                &(PreciseNumber::new(c_start)?),
-            )?
-            .to_imprecise()?;
-
-        // TODO: need to handle rounding up/down, especially if not all the source_amount will be used (i.e. there's not enough swap_destination_amount)
 
         Some((source_amount, destination_amount))
     }
@@ -635,28 +450,6 @@ fn is_slope_valid(curve: &LinearPriceCurve) -> Option<()> {
     {
         true => Some(()),
         false => None,
-    }
-}
-
-/// This can be removed once we settle on either the quadratic or bsearch method, just using to triage
-/// between the two methods for now
-impl LinearPriceCurve {
-    fn swap_a_to_b(
-        &self,
-        source_amount: u128,
-        swap_source_amount: u128,
-        swap_destination_amount: u128,
-    ) -> Option<(u128, u128)> {
-        self.swap_a_to_b_quadratic(source_amount, swap_source_amount, swap_destination_amount)
-    }
-
-    fn swap_b_to_a(
-        &self,
-        source_amount: u128,
-        swap_source_amount: u128,
-        swap_destination_amount: u128,
-    ) -> Option<(u128, u128)> {
-        self.swap_b_to_a_quadratic(source_amount, swap_source_amount, swap_destination_amount)
     }
 }
 
@@ -1103,7 +896,6 @@ mod tests {
         // with initial_token_r_price == u64::MAX, swap_a_to_b_quadratic always either overflows on the sqrt calculation
         // or there aren't enough R tokens to get any C tokens out
         // note this is independent of initial_token_c_price (see below) since it's only dependent on R locked
-        // (this is true for both quadratic and bsearch methods)
         // 18446744073709551615 <- C value at R = 0
         // 18446744073709551616 <- C value at R = 2^64 <- minimum amount of R to get any C tokens out, but already overflows
         for exp in 0..128 {
@@ -1178,7 +970,6 @@ mod tests {
         // 18446744073709551615.00 <- C value at R = 0
         // 18446744076853685892.94 <- C value at R = 2^64 - 1
         // (diff is 31441_34276.94, should floor down)
-        // this fails with bsearch (amt_r_locked_between_c_values_u128 calculation overflows) but works with quadratic
         let result = curve.swap_without_fees(
             (u64::MAX).into(),
             0,
@@ -1201,7 +992,6 @@ mod tests {
         // (note due to PreciseNumber only having 12 decimals of precision, the runtime C_end value is
         // 34.9999 instead of 35.0000 - the runtime is basically using a slope of 1)
         // (runtime diff is 18446_74406_94145_84319.99)
-        // this fails with bsearch (overflow) but works with quadratic
         let result = curve.swap_without_fees(
             170141183460469231713240559646469521406,
             0,
@@ -1230,7 +1020,6 @@ mod tests {
         // testing b -> a on the same curve
         // 170141183460469231713240559646469521406 <- R value at C = 36893488143124135935.00
         // 42535295884924348538429480234146332673.37 <- R value at C = 27670116108416843774 (halfway to initial C)
-        // (this works for quadratic but overflows on bsearch)
         let result = curve
             .swap_without_fees(
                 9223372034707292161, // amount C in = diff between C values
@@ -1334,7 +1123,6 @@ mod tests {
         // 18446744073709551615.00 <- C value at R = 0
         // 18446744073709551679.00 <- C value at R = 2^70
         // diff is 64
-        // this fails with bsearch (overflow) but works with quadratic
         let result = curve.swap_without_fees(
             2u128.pow(70),
             0,

@@ -367,13 +367,11 @@ describe('anchor-token-swap', () => {
     let slope_numerator = new anchor.BN(1);
     let slope_denominator = new anchor.BN(200000000);
     let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
-    let c0 = new anchor.BN(30000000000);
 
     const tx = await program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
       r0,
-      c0,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
@@ -644,14 +642,12 @@ describe('anchor-token-swap', () => {
     let slope_numerator = new anchor.BN(1);
     let slope_denominator = new anchor.BN(200000000);
     let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
-    let c0 = new anchor.BN(30000000000);
 
     // zero token B on init should fail 
     await assert.rejects(program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
       r0,
-      c0,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
@@ -674,7 +670,6 @@ describe('anchor-token-swap', () => {
       slope_numerator,
       slope_denominator,
       r0,
-      c0,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
@@ -716,13 +711,11 @@ describe('anchor-token-swap', () => {
     let slope_numerator = new anchor.BN(1);
     let slope_denominator = new anchor.BN(200000000);
     let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
-    let c0 = new anchor.BN(30000000000);
 
     const tx = await program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
       r0,
-      c0,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,

@@ -23,20 +23,25 @@ use {
 };
 
 /// LinearPriceCurve struct implementing CurveCalculator
-/// R is the "collateral" token (e.g. RLY), C is the "bonded" token (e.g. TAKI)
-/// Price of a single C token (r, denominated in R) is defined by `r - initial_token_r_price = slope*(c - initial_token_c_price)`
-/// where c is the amount of C that’s backed by R
-/// TODO: rename all these to token A and token B, just using r and c temporarily while writing this
+/// A is the "collateral" token (e.g. RLY), B is the "bonded" token (e.g. TAKI).
+/// The price of a single B token (a, denominated in amount of token A) is defined by
+/// `a - initial_token_a_price = slope*(b - initial_token_b_value)`
+/// where b is the amount of token B that’s backed by token A (so `b - initial_token_b_value` is the amount of
+/// token B that's backed by token A from just this curve)
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LinearPriceCurve {
     /// Slope of price increase (how much price of token B increases for every token A that's bonded to it) numerator
     pub slope_numerator: u64,
     /// Slope of price increase (how much price of token B increases for every token A that's bonded to it) denominator
     pub slope_denominator: u64,
-    /// When there's 0 liquidity in the pool, what should the initial price point (c0,r0) defining the curve be?
-    pub initial_token_r_price: u64, // AKA token A
-    /// When there's 0 liquidity in the pool, what should the initial price point (c0,r0) defining the curve be?
-    pub initial_token_c_price: u64, // AKA token B
+    /// When there's 0 liquidity in the pool, what should the initial price point (a0, b0) defining the curve be?
+    /// i.e. what is the cost of 1 b token (denominated in A) when there's 0 liquidity
+    pub initial_token_a_price: u64,
+    /// When there's 0 liquidity in the pool, what should the initial price point (a0, b0) defining the curve be?
+    /// i.e. what b value does this curve start at? Note this doesn't affect any swap math of tokens in/out (which is
+    /// dependent only on the delta of token b along the curve), it just sets an initial offset. If we add in the
+    /// ability to do deposits/withdrawals, then this becomes more important since it marks the initialization point
+    pub initial_token_b_value: u64,
 }
 
 /// Babylonian sqrt method
@@ -53,209 +58,211 @@ fn sqrt_babylonian(x: u128) -> Option<u128> {
     Some(y)
 }
 
-/// Returns the positive root of x given 0 = a*x^2 + bx + c
-/// a is assumed to always be positive
+/// Returns the positive root of x given 0 = k*x^2 + e*x + c
+/// k is assumed to always be positive
+/// (We're using k/e/c instead of a/b/c to not clash with token a/b names)
 fn solve_quadratic_positive_root(
-    a_numerator: &PreciseNumber,
-    a_denominator: &PreciseNumber,
-    b_abs_value: &PreciseNumber,
-    b_is_negative: bool,
+    k_numerator: &PreciseNumber,
+    k_denominator: &PreciseNumber,
+    e_abs_value: &PreciseNumber,
+    e_is_negative: bool,
     c_abs_value: &PreciseNumber,
     c_is_negative: bool,
     should_round_sqrt_up: bool,
 ) -> Option<PreciseNumber> {
-    // solve x = (-b + sqrt(b^2 - 4ac)) / 2a
+    // solve x = (-e + sqrt(e^2 - 4kc)) / 2k
 
-    // a * 4 * c
-    let four_a_c_abs_value = a_numerator
+    // k * 4 * c
+    let four_k_c_abs_value = k_numerator
         .checked_mul(&(PreciseNumber::new(4)?))?
         .checked_mul(c_abs_value)?
-        .checked_div(a_denominator)?;
+        .checked_div(k_denominator)?;
 
-    // b^2 - four_a_c
-    let b_squared = b_abs_value.checked_mul(b_abs_value)?;
-    let b2_minus_4ac = match c_is_negative {
-        // b^2 - (-|4ac|)
-        true => b_squared.checked_add(&four_a_c_abs_value)?,
-        // b^2 - (+|4ac|)
-        false => b_squared.checked_sub(&four_a_c_abs_value)?, // we're going to sqrt this so no need for unsigned_sub
+    // e^2 - four_k_c
+    let e_squared = e_abs_value.checked_mul(e_abs_value)?;
+    let e2_minus_4kc = match c_is_negative {
+        // e^2 - (-|4kc|)
+        true => e_squared.checked_add(&four_k_c_abs_value)?,
+        // e^2 - (+|4kc|)
+        false => e_squared.checked_sub(&four_k_c_abs_value)?, // we're going to sqrt this so no need for unsigned_sub
     };
 
-    let sqrt_b2_minus_4ac;
-    if b2_minus_4ac.less_than(&(PreciseNumber::new(1)?)) {
+    // note we have to use u128 sqrt below since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
+    let sqrt_e2_minus_4kc;
+    if e2_minus_4kc.less_than(&(PreciseNumber::new(1)?)) {
         // PreciseNumber's out of the box sqrt is too inaccurate for numbers < 1, add as many
         // decimals as we can fit into u128 (12 max from PreciseNumber + 26) and then do it manually
         // TODO: this would be cleaner if we also encapsulated it into DFSPreciseNumber.sqrt
-        let b2_minus_4ac_padded =
-            b2_minus_4ac.checked_mul(&(PreciseNumber::new(100_0000_0000_0000_0000_0000_0000)?))?;
-        let b2_minus_4ac_padded_u128 = b2_minus_4ac_padded.to_imprecise()?;
-        let sqrt_b2_minus_4ac_padded_u128 = sqrt_babylonian(b2_minus_4ac_padded_u128)?;
+        let e2_minus_4kc_padded =
+            e2_minus_4kc.checked_mul(&(PreciseNumber::new(100_0000_0000_0000_0000_0000_0000)?))?;
+        let e2_minus_4kc_padded_u128 = e2_minus_4kc_padded.to_imprecise()?;
+        let sqrt_e2_minus_4kc_padded_u128 = sqrt_babylonian(e2_minus_4kc_padded_u128)?;
 
-        let sqrt_b2_minus_4ac_padded_unrounded = PreciseNumber::new(sqrt_b2_minus_4ac_padded_u128)?;
+        let sqrt_e2_minus_4kc_padded_unrounded = PreciseNumber::new(sqrt_e2_minus_4kc_padded_u128)?;
 
         // unpad by dividing result by 13 decimals
-        let sqrt_b2_minus_4ac_unrounded = sqrt_b2_minus_4ac_padded_unrounded
+        let sqrt_e2_minus_4kc_unrounded = sqrt_e2_minus_4kc_padded_unrounded
             .checked_div(&(PreciseNumber::new(10_0000_0000_0000)?))?;
 
-        let is_not_perfect_square = sqrt_b2_minus_4ac_padded_unrounded
-            .checked_mul(&sqrt_b2_minus_4ac_padded_unrounded)?
-            .less_than(&b2_minus_4ac_padded);
+        let is_not_perfect_square = sqrt_e2_minus_4kc_padded_unrounded
+            .checked_mul(&sqrt_e2_minus_4kc_padded_unrounded)?
+            .less_than(&e2_minus_4kc_padded);
 
         // make sure to round up if we're supposed to (since all these numbers are < 1, this means rounding up
         // the last digit of PreciseNumber's 12 decimals)
         let last_digit =
             PreciseNumber::new(1)?.checked_div(&(PreciseNumber::new(1_0000_0000_0000)?))?;
-        sqrt_b2_minus_4ac = match should_round_sqrt_up && is_not_perfect_square {
-            true => sqrt_b2_minus_4ac_unrounded.checked_add(&last_digit)?,
-            false => sqrt_b2_minus_4ac_unrounded,
+        sqrt_e2_minus_4kc = match should_round_sqrt_up && is_not_perfect_square {
+            true => sqrt_e2_minus_4kc_unrounded.checked_add(&last_digit)?,
+            false => sqrt_e2_minus_4kc_unrounded,
         };
     } else {
-        // note we have to use u128 sqrt since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
-        let b2_minus_4ac_u128 =
-            match b2_minus_4ac.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
-                true => b2_minus_4ac.to_imprecise()?,
+        let e2_minus_4kc_u128 =
+            match e2_minus_4kc.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
+                true => e2_minus_4kc.to_imprecise()?,
                 // to_imprecise panics instead of returning None so need to handle explicitly here
                 // TODO: should do this everywhere else we call to_imprecise also, probably put into a DFSPreciseNumber wrapper
                 false => return None,
             };
-        let sqrt_b2_minus_4ac_u128 = sqrt_babylonian(b2_minus_4ac_u128)?;
-        let sqrt_b2_minus_4ac_unrounded = PreciseNumber::new(sqrt_b2_minus_4ac_u128)?;
+        let sqrt_e2_minus_4kc_u128 = sqrt_babylonian(e2_minus_4kc_u128)?;
+        let sqrt_e2_minus_4kc_unrounded = PreciseNumber::new(sqrt_e2_minus_4kc_u128)?;
 
-        let is_not_perfect_square = sqrt_b2_minus_4ac_unrounded
-            .checked_mul(&sqrt_b2_minus_4ac_unrounded)?
-            .less_than(&b2_minus_4ac);
+        let is_not_perfect_square = sqrt_e2_minus_4kc_unrounded
+            .checked_mul(&sqrt_e2_minus_4kc_unrounded)?
+            .less_than(&e2_minus_4kc);
 
         // make sure to add 1 if we're supposed to round up (and it wasn't a perfect square)
-        sqrt_b2_minus_4ac = match should_round_sqrt_up && is_not_perfect_square {
-            true => sqrt_b2_minus_4ac_unrounded.checked_add(&(PreciseNumber::new(1)?))?,
-            false => sqrt_b2_minus_4ac_unrounded,
+        sqrt_e2_minus_4kc = match should_round_sqrt_up && is_not_perfect_square {
+            true => sqrt_e2_minus_4kc_unrounded.checked_add(&(PreciseNumber::new(1)?))?,
+            false => sqrt_e2_minus_4kc_unrounded,
         };
     }
 
-    // numerator is sqrt(b^2-4ac) - b
-    let numerator = match b_is_negative {
+    // numerator is sqrt(e^2-4kc) - e
+    let numerator = match e_is_negative {
         true => {
-            // sqrt_b2_minus_4ac - (-|b|)
-            sqrt_b2_minus_4ac.checked_add(b_abs_value)?
+            // sqrt_e2_minus_4kc - (-|e|)
+            sqrt_e2_minus_4kc.checked_add(e_abs_value)?
         }
         false => {
-            // sqrt_b2_minus_4ac - |b|
+            // sqrt_e2_minus_4kc - |e|
             // this needs to always be positive for our return value to be positive, so use checked_sub
-            sqrt_b2_minus_4ac.checked_sub(b_abs_value)?
+            sqrt_e2_minus_4kc.checked_sub(e_abs_value)?
         }
     };
 
-    // finally we return (sqrt(b^2-4ac) - b)/2a,
-    // AKA numerator * a_denominator / a_numerator / 2 (do all the division last)
+    // finally we return (sqrt(e^2-4kc) - e)/2k,
+    // AKA numerator * k_denominator / k_numerator / 2 (do all the division last)
     numerator
-        .checked_mul(a_denominator)?
-        .checked_div(&a_numerator)?
+        .checked_mul(k_denominator)?
+        .checked_div(&k_numerator)?
         .checked_div(&(PreciseNumber::new(2)?))
 }
 
-/// These functions use the integral of the linear price curve to determine liquidity of R at a
-/// given C value (amt_r_locked_at_c_value_quadratic)
-/// It also uses the quadratic formula to solve the same integral to determine the C value for a given
-/// liquidity (c_value_with_amt_r_locked_quadratic)
+/// These functions use the integral of the linear price curve to determine liquidity of A at a
+/// given B value (amt_a_locked_at_b_value_quadratic)
+/// It also uses the quadratic formula to solve the same integral to determine the B value for a given
+/// liquidity (b_value_with_amt_a_locked_quadratic)
 ///
-/// swap_a_to_b_quadratic and swap_b_to_a_quadratic are the key functions at the bottom
-/// the sqrt function drops down to u128 so we don't use all our compute but everything else uses PreciseNumber
+/// swap_a_to_b and swap_b_to_a are the key functions at the bottom
+/// The sqrt function drops down to u128 so we don't use all our compute but everything else uses PreciseNumber
 impl LinearPriceCurve {
-    /// Returns the coefficients a, b, b_is_negative, i, i_is_negative in the liquidity integral
-    /// token_r_bonded = 0.5m*c^2 + (r0 - m*c0)*c + i0
-    /// a == 0.5m, b == (r0 - m*c0), i0 == integration constant when 0 collateral token is locked at c0
-    /// Note a is returned as a fraction since returning it as a pre-divided PreciseNumber loses a lot of
-    /// precision (only 12 decimal digits max) - we're going to be multiplying it against prices (a*c^2) so
+    /// Returns the coefficients k, e, e_is_negative, i, i_is_negative in the liquidity integral
+    /// token_a_bonded = 0.5m*b^2 + (a0 - m*b0)*b + i0
+    /// k == 0.5m, e == (a0 - m*b0), i0 == integration constant when 0 collateral token is locked at b0
+    /// (We're using k/e instead of a/b to not clash with token a/b names)
+    /// Note k is returned as a fraction since returning it as a pre-divided PreciseNumber loses a lot of
+    /// precision (only 12 decimal digits max) - we're going to be multiplying it against prices (k*b^2) so
     /// no need to lose that precision (and as long as slope_numerator/price are all u64 there's plenty of
     /// room in PreciseNumber to avoid overflow)
     fn liquidity_curve_quadratic_constants(
         &self,
     ) -> Option<(
-        PreciseNumber, // a numerator
-        PreciseNumber, // a denominator
-        PreciseNumber, // b abs value
-        bool,          // b is negative
+        PreciseNumber, // k numerator
+        PreciseNumber, // k denominator
+        PreciseNumber, // e abs value
+        bool,          // e is negative
         PreciseNumber, // i0 abs value
         bool,          // i0 is negative
     )> {
         let slope_numerator = PreciseNumber::new(self.slope_numerator.into())?;
         let slope_denominator = PreciseNumber::new(self.slope_denominator.into())?;
-        let r0 = PreciseNumber::new(self.initial_token_r_price.into())?;
-        let c0 = PreciseNumber::new(self.initial_token_c_price.into())?;
+        let a0 = PreciseNumber::new(self.initial_token_a_price.into())?;
+        let b0 = PreciseNumber::new(self.initial_token_b_value.into())?;
 
-        // a == 0.5m, precalculate a*c0^2 (do the division last so we don't lose precision)
-        let a_numerator = slope_numerator.checked_mul(&(PreciseNumber::new(1)?))?;
-        let a_denominator = slope_denominator.checked_mul(&(PreciseNumber::new(2)?))?;
-        let a_c0_squared_numerator = a_numerator.checked_mul(&c0)?.checked_mul(&c0)?;
-        let a_c0_squared = a_c0_squared_numerator
+        // k == 0.5m, precalculate k*b0^2 (do the division last so we don't lose precision)
+        let k_numerator = slope_numerator.checked_mul(&(PreciseNumber::new(1)?))?;
+        let k_denominator = slope_denominator.checked_mul(&(PreciseNumber::new(2)?))?;
+        let k_b0_squared_numerator = k_numerator.checked_mul(&b0)?.checked_mul(&b0)?;
+        let k_b0_squared = k_b0_squared_numerator
             .checked_div(&slope_denominator)?
-            .checked_div(&(PreciseNumber::new(2)?))?; // this is a little more precise if we divide here instead of using a_denominator
+            .checked_div(&(PreciseNumber::new(2)?))?; // this is a little more precise if we divide here instead of using k_denominator
 
         // TODO: rewrite everything using foo_is_positive instead of foo_is_negative, probably way easier to read
 
-        // b == r0 - m*c0 (need to use unsigned_sub here to handle negatives)
+        // e == a0 - m*b0 (need to use unsigned_sub here to handle negatives)
         let mc0 = slope_numerator
-            .checked_mul(&c0)?
+            .checked_mul(&b0)?
             .checked_div(&slope_denominator)?;
-        let (b_abs_value, b_is_negative) = r0.unsigned_sub(&mc0);
+        let (e_abs_value, e_is_negative) = a0.unsigned_sub(&mc0);
 
-        // calculate integration constant i0 when 0 collateral token is locked at c0,
-        // i.e. 0 = a*c0^2 + b*c0 + i
+        // calculate integration constant i0 when 0 collateral token is locked at b0,
+        // i.e. 0 = k*b0^2 + e*b0 + i
         let (i0_abs_value, i0_is_negative);
-        if b_is_negative {
-            // since a is always positive, it's a little cleaner to solve for -i = a*c0^2 + b*c0
+        if e_is_negative {
+            // since k is always positive, it's a little cleaner to solve for -i = k*b0^2 + e*b0
             // instead of working with all the negatives with PreciseNumber
-            let negative_i0_info = a_c0_squared.unsigned_sub(&(b_abs_value.checked_mul(&c0)?));
+            let negative_i0_info = k_b0_squared.unsigned_sub(&(e_abs_value.checked_mul(&b0)?));
             i0_abs_value = negative_i0_info.0; // abs value doesn't change from -i to i
             i0_is_negative = !negative_i0_info.1; // i_is_negative is opposite of whether negative_i is negative
         } else {
-            // a and b are both positive so i is always negative
-            i0_abs_value = a_c0_squared.checked_add(&(b_abs_value.checked_mul(&c0)?))?;
+            // k and e are both positive so i is always negative
+            i0_abs_value = k_b0_squared.checked_add(&(e_abs_value.checked_mul(&b0)?))?;
             i0_is_negative = true;
         }
 
         Some((
-            a_numerator,
-            a_denominator,
-            b_abs_value,
-            b_is_negative,
+            k_numerator,
+            k_denominator,
+            e_abs_value,
+            e_is_negative,
             i0_abs_value,
             i0_is_negative,
         ))
     }
 
-    /// Returns the amount of R token locked at a given c_value (by plugging c_value into the integral function)
-    /// Since the return must be positive, this only works for C > initial_c_value (there are potentially rounding
-    /// errors when c_value == initial_c_value where a very small negative PreciseNumber should round up to 0, so
-    /// best not to call this with c_value == initial_c_value either)
-    fn amt_r_locked_at_c_value_quadratic(&self, c_value: &PreciseNumber) -> Option<PreciseNumber> {
-        let (a_numerator, a_denominator, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
+    /// Returns the amount of A token locked at a given b_value (by plugging b_value into the integral function)
+    /// Since the return must be positive, this only works for B > initial_b_value (there are potentially rounding
+    /// errors when b_value == initial_b_value where a very small negative PreciseNumber should round up to 0, so
+    /// best not to call this with b_value == initial_b_value either)
+    fn amt_a_locked_at_b_value_quadratic(&self, b_value: &PreciseNumber) -> Option<PreciseNumber> {
+        let (k_numerator, k_denominator, e_abs_value, e_is_negative, i0_abs_value, i0_is_negative) =
             self.liquidity_curve_quadratic_constants()?;
 
-        let a_price_squared = a_numerator
-            .checked_mul(c_value)?
-            .checked_mul(c_value)?
-            .checked_div(&a_denominator)?;
-        let b_price_abs_value = b_abs_value.checked_mul(c_value)?;
+        let k_price_squared = k_numerator
+            .checked_mul(b_value)?
+            .checked_mul(b_value)?
+            .checked_div(&k_denominator)?;
+        let e_price_abs_value = e_abs_value.checked_mul(b_value)?;
 
         // there's some rounding errors at the edges that can cause 0 to look like slightly negative numbers when calling
         // PreciseNumber subtraction, so need to correctly treat that as 0
-        let (amount_locked, amount_is_negative) = if b_is_negative && i0_is_negative {
-            let total_to_subtract = b_price_abs_value.checked_add(&i0_abs_value)?;
+        let (amount_locked, amount_is_negative) = if e_is_negative && i0_is_negative {
+            let total_to_subtract = e_price_abs_value.checked_add(&i0_abs_value)?;
 
-            a_price_squared.unsigned_sub(&total_to_subtract)
-        } else if b_is_negative {
-            a_price_squared
+            k_price_squared.unsigned_sub(&total_to_subtract)
+        } else if e_is_negative {
+            k_price_squared
                 .checked_add(&i0_abs_value)?
-                .unsigned_sub(&b_price_abs_value)
+                .unsigned_sub(&e_price_abs_value)
         } else if i0_is_negative {
-            a_price_squared
-                .checked_add(&b_price_abs_value)?
+            k_price_squared
+                .checked_add(&e_price_abs_value)?
                 .unsigned_sub(&i0_abs_value)
         } else {
             (
-                a_price_squared
-                    .checked_add(&b_price_abs_value)?
+                k_price_squared
+                    .checked_add(&e_price_abs_value)?
                     .checked_add(&i0_abs_value)?,
                 false,
             )
@@ -271,36 +278,36 @@ impl LinearPriceCurve {
         Some(amount_locked)
     }
 
-    /// Returns the positive root for token_r_amount = 0.5m*c^2 + (r0 - m*c0)*c + i0
-    /// token_r_amount is assumed to always be >= 0 (i.e. no negative amounts of collateral token allowed)
-    /// i is the integration constant such that 0 collateral token is locked at c0
-    fn c_value_with_amt_r_locked_quadratic(
+    /// Returns the positive root for token_a_amount = 0.5m*b^2 + (a0 - m*b0)*b + i0
+    /// token_a_amount is assumed to always be >= 0 (i.e. no negative amounts of collateral token allowed)
+    /// i is the integration constant such that 0 collateral token is locked at b0
+    fn b_value_with_amt_a_locked_quadratic(
         &self,
-        token_r_amount: &PreciseNumber,
+        token_a_amount: &PreciseNumber,
         should_round_sqrt_up: bool,
     ) -> Option<PreciseNumber> {
-        let (a_numerator, a_denominator, b_abs_value, b_is_negative, i0_abs_value, i0_is_negative) =
+        let (k_numerator, k_denominator, e_abs_value, e_is_negative, i0_abs_value, i0_is_negative) =
             self.liquidity_curve_quadratic_constants()?;
 
-        // finally, solve token_r_amount = a*c^2 + b*c + i0
-        // i.e. 0 = a*c^2 + b*c + (i0-token_r_amount)
+        // solve token_a_amount = k*b^2 + e*b + i0
+        // i.e. 0 = k*b^2 + e*b + (i0-token_a_amount)
         let (i_abs_value, i_is_negative);
         if i0_is_negative {
-            // both i0 and (-token_r_amount) are negative - can just add the two amounts and keep the sign negative
-            i_abs_value = i0_abs_value.checked_add(token_r_amount)?;
+            // both i0 and (-token_a_amount) are negative - can just add the two amounts and keep the sign negative
+            i_abs_value = i0_abs_value.checked_add(token_a_amount)?;
             i_is_negative = true;
         } else {
-            // otherwise, we have to do signed subtraction to solve (i0 - token_r_amount)
-            let i_info = i0_abs_value.unsigned_sub(token_r_amount);
+            // otherwise, we have to do signed subtraction to solve (i0 - token_a_amount)
+            let i_info = i0_abs_value.unsigned_sub(token_a_amount);
             i_abs_value = i_info.0;
             i_is_negative = i_info.1;
         }
 
         solve_quadratic_positive_root(
-            &a_numerator,
-            &a_denominator,
-            &b_abs_value,
-            b_is_negative,
+            &k_numerator,
+            &k_denominator,
+            &e_abs_value,
+            e_is_negative,
             &i_abs_value,
             i_is_negative,
             should_round_sqrt_up,
@@ -312,28 +319,29 @@ impl LinearPriceCurve {
     /// Otherwise (if there's enough `swap_destination_amount` to handle all the `source_amount`), returns None
     fn maximum_a_remaining_for_swap_a_to_b(
         &self,
-        c_start: &PreciseNumber,
-        r_start: &PreciseNumber,
+        a_start: &PreciseNumber,
+        b_start: &PreciseNumber,
         source_amount: u128,
         swap_destination_amount: u128,
     ) -> Option<(u128, u128)> {
-        // if at c_start + swap_destination_amount (the maximum CC that be given out by the swap), the R value is <= source_amount,
-        // then only take that amount of R instead and give them all the CCs remaining
-        let maximum_c_value =
-            c_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?))?;
-        let maximum_r_locked = self.amt_r_locked_at_c_value_quadratic(&maximum_c_value)?;
-        let maximum_r_remaining = maximum_r_locked.checked_sub(&r_start)?;
+        // if at b_start + swap_destination_amount (the maximum B that be given out by the swap),
+        // then the A value is <= source_amount, so only take that amount of A instead and give them all the
+        // Bs remaining
+        let maximum_b_value =
+            b_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?))?;
+        let maximum_a_locked = self.amt_a_locked_at_b_value_quadratic(&maximum_b_value)?;
+        let maximum_a_remaining = maximum_a_locked.checked_sub(&a_start)?;
 
         // to_imprecise panics instead of returning None so need to handle explicitly here
         // TODO: this could be simplified with DFSPreciseNumber
-        let maximum_r_remaining_u128 =
-            match maximum_r_remaining.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
-                true => maximum_r_remaining.to_imprecise(),
+        let maximum_a_remaining_u128 =
+            match maximum_a_remaining.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
+                true => maximum_a_remaining.to_imprecise(),
                 false => None,
             }?;
 
-        if maximum_r_remaining_u128 <= source_amount {
-            return Some((maximum_r_remaining_u128, swap_destination_amount));
+        if maximum_a_remaining_u128 <= source_amount {
+            return Some((maximum_a_remaining_u128, swap_destination_amount));
         } else {
             return None;
         }
@@ -352,13 +360,13 @@ impl LinearPriceCurve {
         // otherwise there could be some A token in the pool that isn't part of the bonding curve
 
         // quadratic formula version:
-        let r_start = PreciseNumber::new(swap_source_amount)?;
+        let a_start = PreciseNumber::new(swap_source_amount)?;
 
-        let c_start = self.c_value_with_amt_r_locked_quadratic(&r_start, true)?;
+        let b_start = self.b_value_with_amt_a_locked_quadratic(&a_start, true)?;
 
         match self.maximum_a_remaining_for_swap_a_to_b(
-            &c_start,
-            &r_start,
+            &a_start,
+            &b_start,
             source_amount,
             swap_destination_amount,
         ) {
@@ -367,12 +375,13 @@ impl LinearPriceCurve {
             None => (),
         }
 
-        // otherwise, there's enough C tokens for all the R they put in, find the c_end value for the amount of R they're putting in and give them `c_end - c_start` tokens out
-        let r_end = r_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
+        // otherwise, there's enough B tokens for all the A they put in, find the b_end value for the amount of A
+        // they're putting in and give them `b_end - b_start` tokens out
+        let a_end = a_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
 
-        let c_end = self.c_value_with_amt_r_locked_quadratic(&r_end, false)?;
+        let b_end = self.b_value_with_amt_a_locked_quadratic(&a_end, false)?;
 
-        let difference = c_end.checked_sub(&c_start)?;
+        let difference = b_end.checked_sub(&b_start)?;
         // PreciseNumber rounds .5+ up by default, make sure to floor instead so we don't allow
         // dust to round up for free
         let destination_amount = difference.floor()?.to_imprecise()?;
@@ -390,39 +399,41 @@ impl LinearPriceCurve {
         // note this only works if non-init deposits are disabled (and maybe if the initial deposit didn't have any token A in it?),
         // otherwise there could be some A token in the pool that isn't part of the bonding curve
 
-        // make sure we round up here so that c_end and r_end are also over-estimated, which rounds down the final token a output
-        let c_start = self.c_value_with_amt_r_locked_quadratic(
+        // make sure we round up here so that b_end and a_end are also over-estimated, which rounds down the final
+        // token a output
+        let b_start = self.b_value_with_amt_a_locked_quadratic(
             &(PreciseNumber::new(swap_destination_amount)?),
             true,
         )?;
 
-        // c_end can be negative if the user put in too many C tokens (handled below)
-        let (c_end, c_end_is_negative) =
-            c_start.unsigned_sub(&(PreciseNumber::new(source_amount)?));
+        // b_end can be negative if the user put in too many B tokens (handled below)
+        let (b_end, b_end_is_negative) =
+            b_start.unsigned_sub(&(PreciseNumber::new(source_amount)?));
 
-        // make sure to use c_end.ceiling() when doing below calculations r_end so we don't round in favor of the user
-        // if we use c_end directly, it's possible to gain tokens for free by swapping back and forth due to
-        // rounding (see swap_large_price_almost_max_r test)
-        // (especially since sqrt_babylonian under estimates, we often will end up with a c_end/r_end that's too low
+        // make sure to use b_end.ceiling() when doing below calculations a_end so we don't round in favor of the user
+        // if we use b_end directly, it's possible to gain tokens for free by swapping back and forth due to
+        // rounding (see swap_large_price_almost_max_a test)
+        // (especially since sqrt_babylonian under estimates, we often will end up with a b_end/a_end that's too low
         // due to rounding)
-        let c_end = c_end.ceiling()?;
+        let b_end = b_end.ceiling()?;
 
-        // if c_end <= initial_c_value (i.e. there aren't enough R tokens in the swap for all the C tokens they put in), then just give
-        // them all of the r tokens (swap_destination_amount) and only take the C tokens required to get down to initial_c_value
-        // this only works if we assume 0 R locked at initial_c_value
-        let initial_c_value = PreciseNumber::new(self.initial_token_c_price.into())?;
-        if c_end_is_negative || c_end.less_than_or_equal(&initial_c_value) {
-            let maximum_c_remaining = c_start.checked_sub(&initial_c_value)?.to_imprecise()?;
-            return Some((maximum_c_remaining, swap_destination_amount));
+        // if b_end <= initial_b_value (i.e. there aren't enough A tokens in the swap for all the B tokens they put in),
+        // then just give them all of the a tokens (swap_destination_amount) and only take the B tokens required to
+        // get down to initial_b_value. this only works if we assume 0 A locked at initial_b_value
+        let initial_b_value = PreciseNumber::new(self.initial_token_b_value.into())?;
+        if b_end_is_negative || b_end.less_than_or_equal(&initial_b_value) {
+            let maximum_b_remaining = b_start.checked_sub(&initial_b_value)?.to_imprecise()?;
+            return Some((maximum_b_remaining, swap_destination_amount));
         }
 
-        // otherwise if there's enough R tokens locked in swap_destination_amount, figure out the R value at c_end and give them the difference (swap_destination_amount - r_end) tokens
-        let r_end = self.amt_r_locked_at_c_value_quadratic(&c_end)?;
+        // otherwise if there's enough A tokens locked in swap_destination_amount, figure out the A value at
+        // b_end and give them the difference (swap_destination_amount - a_end) tokens
+        let a_end = self.amt_a_locked_at_b_value_quadratic(&b_end)?;
 
         // PreciseNumber rounds .5+ up by default, make sure to floor instead so we don't allow
         // dust to round up for free
         let destination_amount = PreciseNumber::new(swap_destination_amount)?
-            .checked_sub(&r_end)?
+            .checked_sub(&a_end)?
             .floor()?
             .to_imprecise()?;
 
@@ -488,15 +499,16 @@ impl CurveCalculator for LinearPriceCurve {
         &self,
         _pool_tokens: u128,
         _pool_token_supply: u128,
-        _swap_token_r_amount: u128,
-        _swap_token_c_amount: u128,
+        _swap_token_a_amount: u128,
+        _swap_token_b_amount: u128,
         _round_direction: RoundDirection,
     ) -> Option<TradingTokenResult> {
         // this causes a panic if withdraw_all_token_types is called but that's ok for now, cheap way of
         // disabling withdrawals without having to change how SwapCurve works
         None
 
-        // could we do something like this if we just want pool tokens to be 1-1 with B tokens and not withdrawable/depositable for A tokens?
+        // could we do something like this if we just want pool tokens to be 1-1 with B tokens and not
+        // withdrawable/depositable for A tokens?
         // Some(TradingTokenResult {
         //     token_a_amount: 0,
         //     token_b_amount: pool_tokens,
@@ -510,8 +522,8 @@ impl CurveCalculator for LinearPriceCurve {
     fn deposit_single_token_type(
         &self,
         _source_amount: u128,
-        _swap_token_r_amount: u128,
-        _swap_token_c_amount: u128,
+        _swap_token_a_amount: u128,
+        _swap_token_b_amount: u128,
         _pool_supply: u128,
         _trade_direction: TradeDirection,
     ) -> Option<u128> {
@@ -526,14 +538,15 @@ impl CurveCalculator for LinearPriceCurve {
     fn withdraw_single_token_type_exact_out(
         &self,
         _source_amount: u128,
-        _swap_token_r_amount: u128,
-        _swap_token_c_amount: u128,
+        _swap_token_a_amount: u128,
+        _swap_token_b_amount: u128,
         _pool_supply: u128,
         _trade_direction: TradeDirection,
     ) -> Option<u128> {
         // this causes a panic if SwapCurve.withdraw_single_token_type_exact_out instruction is called
         // but that's ok for now, cheap way of disabling withdrawals without having to change how SwapCurve works
-        // (also if a non-zero fee curve is created this would also cause a panic, though that's disabled at the lib.rs level)
+        // (also if a non-zero fee curve is created this would also cause a panic, though that's disabled at the
+        // lib.rs level)
         None
     }
 
@@ -549,15 +562,15 @@ impl CurveCalculator for LinearPriceCurve {
     /// Validate the given supply on initialization.
     /// We require at least some bonded token B for the curve to be useful (collateral token can be 0)
     /// TODO: if we enable deposits, then this check isn't needed, the pool can start with 0 of both
-    fn validate_supply(&self, token_r_amount: u64, token_c_amount: u64) -> Result<(), SwapError> {
-        if token_c_amount == 0 {
+    fn validate_supply(&self, token_a_amount: u64, token_b_amount: u64) -> Result<(), SwapError> {
+        if token_b_amount == 0 {
             return Err(SwapError::EmptySupply);
         }
 
         // i think there's probably a way to allow initial collateral token if we adjust the
         // initial token values to take that into account, but seems easier to disallow it. it's the same
         // as starting with 0 collateral token and then doing a swap anyway
-        if token_r_amount != 0 {
+        if token_a_amount != 0 {
             return Err(SwapError::InvalidSupply);
         }
         Ok(())
@@ -575,14 +588,14 @@ impl CurveCalculator for LinearPriceCurve {
     /// value of the token A side (as denominated in token B) to the token B side.
     fn normalized_value(
         &self,
-        swap_token_r_amount: u128,
-        swap_token_c_amount: u128,
+        swap_token_a_amount: u128,
+        swap_token_b_amount: u128,
     ) -> Option<PreciseNumber> {
-        let c_value_of_r = self.c_value_with_amt_r_locked_quadratic(
-            &(PreciseNumber::new(swap_token_r_amount)?),
+        let b_value_of_a = self.b_value_with_amt_a_locked_quadratic(
+            &(PreciseNumber::new(swap_token_a_amount)?),
             false,
         )?;
-        return Some(c_value_of_r.checked_add(&(PreciseNumber::new(swap_token_c_amount)?))?);
+        return Some(b_value_of_a.checked_add(&(PreciseNumber::new(swap_token_b_amount)?))?);
     }
 }
 
@@ -602,13 +615,13 @@ impl Pack for LinearPriceCurve {
     fn unpack_from_slice(input: &[u8]) -> Result<LinearPriceCurve, ProgramError> {
         let slope_numerator = array_ref![input, 0, 8];
         let slope_denominator = array_ref![input, 8, 8];
-        let initial_token_r_price = array_ref![input, 16, 8];
-        let initial_token_c_price = array_ref![input, 24, 8];
+        let initial_token_a_price = array_ref![input, 16, 8];
+        let initial_token_b_value = array_ref![input, 24, 8];
         Ok(Self {
             slope_numerator: u64::from_le_bytes(*slope_numerator),
             slope_denominator: u64::from_le_bytes(*slope_denominator),
-            initial_token_r_price: u64::from_le_bytes(*initial_token_r_price),
-            initial_token_c_price: u64::from_le_bytes(*initial_token_c_price),
+            initial_token_a_price: u64::from_le_bytes(*initial_token_a_price),
+            initial_token_b_value: u64::from_le_bytes(*initial_token_b_value),
         })
     }
 }
@@ -619,8 +632,8 @@ impl DynPack for LinearPriceCurve {
         *slope_numerator = self.slope_numerator.to_le_bytes();
         let slope_denominator = array_mut_ref![output, 8, 8];
         *slope_denominator = self.slope_denominator.to_le_bytes();
-        let initial_token_r_price = array_mut_ref![output, 16, 8];
-        *initial_token_r_price = self.initial_token_r_price.to_le_bytes();
+        let initial_token_a_price = array_mut_ref![output, 16, 8];
+        *initial_token_a_price = self.initial_token_a_price.to_le_bytes();
         let initial_token_b_value = array_mut_ref![output, 24, 8];
         *initial_token_b_value = self.initial_token_b_value.to_le_bytes();
     }
@@ -637,16 +650,16 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 2,
-            initial_token_r_price: 50,
-            initial_token_c_price: 300,
+            initial_token_a_price: 50,
+            initial_token_b_value: 300,
         };
 
-        // put in 101 RLY, should get 2 CC out
+        // put in 101 A, should get 2 B out
         let (source_amount, destination_amount) = curve.swap_a_to_b(101, 0, 5000).unwrap();
         assert_eq!(source_amount, 101);
         assert_eq!(destination_amount, 2);
 
-        // put in 103 RLY, should get 2 more CC out
+        // put in 103 A, should get 2 more B out
         let (source_amount, destination_amount) = curve.swap_a_to_b(103, 101, 4998).unwrap();
         assert_eq!(source_amount, 103);
         assert_eq!(destination_amount, 2);
@@ -654,9 +667,9 @@ mod tests {
         // same as above but assuming they both have 8 decimals
         let curve = LinearPriceCurve {
             slope_numerator: 1,
-            slope_denominator: 2_0000_0000, // slope needs to be scaled down to take into account C having 8 decimals
-            initial_token_r_price: 50, // since they both have 8 decimals, no need to scale this (it's still 50 base RLY for 1 base CC)
-            initial_token_c_price: 300_0000_0000,
+            slope_denominator: 2_0000_0000, // slope needs to be scaled down to take into account B having 8 decimals
+            initial_token_a_price: 50, // since they both have 8 decimals, no need to scale this (it's still 50 base A for 1 base B)
+            initial_token_b_value: 300_0000_0000,
         };
 
         let (source_amount, destination_amount) =
@@ -664,32 +677,32 @@ mod tests {
         assert_eq!(source_amount, 101_0000_0000);
         assert_eq!(destination_amount, 2_0000_0000);
 
-        // putting in 5900K RLY @ 81600 RLY locked/20CC remaining should give out the last 20 CC
+        // putting in 5900K A @ 81600 A locked/20B remaining should give out the last 20 B
         let (source_amount, destination_amount) = curve
             .swap_a_to_b(5900_0000_0000, 81600_0000_0000, 20_0000_0000)
             .unwrap();
         assert_eq!(source_amount, 5900_0000_0000);
         assert_eq!(destination_amount, 20_0000_0000);
 
-        // putting in 10K RLY @ 81600 RLY locked/20CC remaining should give out the last 20 CC and only take 5.9K RLY
+        // putting in 10K A @ 81600 A locked/20B remaining should give out the last 20 B and only take 5.9K A
         let (source_amount, destination_amount) = curve
             .swap_a_to_b(10000_0000_0000, 81600_0000_0000, 20_0000_0000)
             .unwrap();
         assert_eq!(source_amount, 5900_0000_0000);
         assert_eq!(destination_amount, 20_0000_0000);
 
-        // similar to 145K segment of forte curve, but assume r has 18 decimals (this just lets us cram more precision into
+        // similar to 145K segment of forte curve, but assume a has 18 decimals (this just lets us cram more precision into
         // the calculation, as long as we interpret it correctly back out at the end)
-        // since r has 12 more decimals of precision than c, scale both slope and initial_token_r_price by 1e12
+        // since a has 12 more decimals of precision than b, scale both slope and initial_token_a_price by 1e12
         let curve = LinearPriceCurve {
             slope_numerator: 5689_549_999_968_874, // 5.689549999968874e-9 in forte, so should be 5.689549999968874e3 now
             slope_denominator: 1_000_000_000_000,
-            initial_token_r_price: 35_915742_315103, // 35.9157423151027 in forte, so should be 3.59...e13 now
-            initial_token_c_price: 145000_000000,
+            initial_token_a_price: 35_915742_315103, // 35.9157423151027 in forte, so should be 3.59...e13 now
+            initial_token_b_value: 145000_000000,
         };
 
-        // putting in 7296... RLY in, should move price to 145_199_999999.99
-        // (i.e. get 199_999999 CC out)
+        // putting in 7296... A in, should move price to 145_199_999999.99
+        // (i.e. get 199_999999 B out)
         let (source_amount, destination_amount) = curve
             .swap_a_to_b(7296_939463_019977_479999, 0, 5000_000000)
             .unwrap();
@@ -705,7 +718,7 @@ mod tests {
         assert_eq!(source_amount, 7296_939463_030000_000000);
         assert_eq!(destination_amount, 200_000000); // crossed past 200 so should give out 200 now
 
-        // put in 7524... more RLY, should get another 199_999999 CC out
+        // put in 7524... more A, should get another 199_999999 B out
         let (source_amount, destination_amount) = curve
             .swap_a_to_b(
                 7524_521463_008709_920000,
@@ -733,18 +746,18 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 2,
-            initial_token_r_price: 50,
-            initial_token_c_price: 300,
+            initial_token_a_price: 50,
+            initial_token_b_value: 300,
         };
 
         // pretty much the opposite cases as above
 
-        // put in 2 CC at 101 RLY, should get 101 RLY out
+        // put in 2 B at 101 A, should get 101 A out
         let (source_amount, destination_amount) = curve.swap_b_to_a(2, 4998, 101).unwrap();
         assert_eq!(source_amount, 2);
         assert_eq!(destination_amount, 101);
 
-        // put in 2 CC at 204 RLY, should get 103 RLY out
+        // put in 2 B at 204 A, should get 103 A out
         let (source_amount, destination_amount) = curve.swap_b_to_a(2, 4996, 204).unwrap();
         assert_eq!(source_amount, 2);
         assert_eq!(destination_amount, 103);
@@ -752,9 +765,9 @@ mod tests {
         // same as above but assuming they both have 8 decimals
         let curve = LinearPriceCurve {
             slope_numerator: 1,
-            slope_denominator: 2_0000_0000, // slope needs to be scaled down to take into account C having 8 decimals
-            initial_token_r_price: 50, // since they both have 8 decimals, no need to scale this (it's still 50 base RLY for 1 base CC)
-            initial_token_c_price: 300_0000_0000,
+            slope_denominator: 2_0000_0000, // slope needs to be scaled down to take into account B having 8 decimals
+            initial_token_a_price: 50, // since they both have 8 decimals, no need to scale this (it's still 50 base A for 1 base B)
+            initial_token_b_value: 300_0000_0000,
         };
 
         let (source_amount, destination_amount) = curve
@@ -763,17 +776,17 @@ mod tests {
         assert_eq!(source_amount, 2_0000_0000);
         assert_eq!(destination_amount, 101_0000_0000);
 
-        // similar to 145K segment of forte curve, but assume r has 18 decimals (this just lets us cram more precision into
+        // similar to 145K segment of forte curve, but assume a has 18 decimals (this just lets us cram more precision into
         // the calculation, as long as we interpret it correctly back out at the end)
-        // since r has 12 more decimals of precision than c, scale both slope and initial_token_r_price by 1e12
+        // since a has 12 more decimals of precision than b, scale both slope and initial_token_a_price by 1e12
         let curve = LinearPriceCurve {
             slope_numerator: 5689_549_999_968_874, // 5.689549999968874e-9 in forte, so should be 5.689549999968874e3 now
             slope_denominator: 1_000_000_000_000,
-            initial_token_r_price: 35_915742_315103, // 35.9157423151027 in forte, so should be 3.59...e13 now
-            initial_token_c_price: 145000_000000,
+            initial_token_a_price: 35_915742_315103, // 35.9157423151027 in forte, so should be 3.59...e13 now
+            initial_token_b_value: 145000_000000,
         };
 
-        // putting in 200 CC at 7296.9394630144 RLY, should get it all out
+        // putting in 200 B at 7296.9394630144 A, should get it all out
         let (source_amount, destination_amount) = curve
             .swap_b_to_a(200_000000, 4800_000000, 7296_939463_019977_480000)
             .unwrap();
@@ -782,7 +795,7 @@ mod tests {
         // 7296_939463019977480000 if we pad some precision to sqrt
         assert_eq!(destination_amount, 7296_939427104235162052);
 
-        // put in 200 CC at 14821.4609260237 RLY, should get 7524.5214630093 RLY out
+        // put in 200 B at 14821.4609260237 A, should get 7524.5214630093 A out
         let (source_amount, destination_amount) = curve
             .swap_b_to_a(200_000000, 4600_000000, 14821_460926_038709_920000)
             .unwrap();
@@ -791,7 +804,7 @@ mod tests {
         // 7524_521463018732440000 if we pad some precision to sqrt
         assert_eq!(destination_amount, 7524_521425965080122058);
 
-        // put in 300 CC at 7296.9394630144 RLY, should get it all out (and only take 200 CC)
+        // put in 300 B at 7296.9394630144 A, should get it all out (and only take 200 B)
         let (source_amount, destination_amount) = curve
             .swap_b_to_a(300_000000, 4800_000000, 7296_939463_019977_480000)
             .unwrap();
@@ -805,21 +818,21 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 2,
-            initial_token_r_price: 0,
-            initial_token_c_price: 0,
+            initial_token_a_price: 0,
+            initial_token_b_value: 0,
         };
 
-        // put in 9 RLY, should get 6 CC out
+        // put in 9 A, should get 6 B out
         let (source_amount, destination_amount) = curve.swap_a_to_b(9, 0, 5000).unwrap();
         assert_eq!(source_amount, 9);
         assert_eq!(destination_amount, 6);
 
-        // put in 6 CC at 9 RLY, should get all 9 RLY out
+        // put in 6 B at 9 A, should get all 9 A out
         let (source_amount, destination_amount) = curve.swap_b_to_a(6, 494, 9).unwrap();
         assert_eq!(source_amount, 6);
         assert_eq!(destination_amount, 9);
 
-        // put in 11 CC at 9 RLY, should get all 9 RLY out and only take 6 CC
+        // put in 11 B at 9 A, should get all 9 A out and only take 6 B
         let (source_amount, destination_amount) = curve.swap_b_to_a(11, 494, 9).unwrap();
         assert_eq!(source_amount, 6);
         assert_eq!(destination_amount, 9);
@@ -830,8 +843,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 2,
-            initial_token_r_price: 50,
-            initial_token_c_price: 300,
+            initial_token_a_price: 50,
+            initial_token_b_value: 300,
         };
 
         let result = curve
@@ -862,8 +875,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: u64::MAX,
             slope_denominator: u64::MAX - 1,
-            initial_token_r_price: 0,
-            initial_token_c_price: 1,
+            initial_token_a_price: 0,
+            initial_token_b_value: 1,
         };
 
         let mut packed = [0u8; LinearPriceCurve::LEN];
@@ -874,8 +887,8 @@ mod tests {
         let mut packed = vec![];
         packed.extend_from_slice(&curve.slope_numerator.to_le_bytes());
         packed.extend_from_slice(&curve.slope_denominator.to_le_bytes());
-        packed.extend_from_slice(&curve.initial_token_r_price.to_le_bytes());
-        packed.extend_from_slice(&curve.initial_token_c_price.to_le_bytes());
+        packed.extend_from_slice(&curve.initial_token_a_price.to_le_bytes());
+        packed.extend_from_slice(&curve.initial_token_b_value.to_le_bytes());
         let unpacked = LinearPriceCurve::unpack(&packed).unwrap();
         assert_eq!(curve, unpacked);
     }
@@ -883,27 +896,27 @@ mod tests {
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
     /// some example curves with large numbers (and make sure they return None instead of panicking etc)
     /// They also test that rounding is always not in the user's favor to prevent arbitrage
-    /// Summary: when initial_token_r_price == u64::MAX, these curves are all useless (regardless of the other
+    /// Summary: when initial_token_a_price == u64::MAX, these curves are all useless (regardless of the other
     /// parameters) - it will overflow before any a tokens are accepted
     #[test]
-    fn swap_large_price_max_r() {
+    fn swap_large_price_max_a() {
         // curve with everything near u64::MAX
         let curve = LinearPriceCurve {
             slope_numerator: u64::MAX,
             slope_denominator: u64::MAX - 1,
-            initial_token_r_price: u64::MAX,
-            // in general for all these swap_large tests, initial C doesn't affect any calculations (it just
-            // determines the initial offset and gets subtracted out at the end), i.e. C inputs/outputs to
+            initial_token_a_price: u64::MAX,
+            // in general for all these swap_large tests, initial B doesn't affect any calculations (it just
+            // determines the initial offset and gets subtracted out at the end), i.e. B inputs/outputs to
             // swap_without_fees don't change if we change this to 0. just using max here just to check it
             // doesn't introduce rounding issues
-            initial_token_c_price: u64::MAX,
+            initial_token_b_value: u64::MAX,
         };
 
-        // with initial_token_r_price == u64::MAX, swap_a_to_b_quadratic always either overflows on the sqrt calculation
-        // or there aren't enough R tokens to get any C tokens out
-        // note this is independent of initial_token_c_price (see below) since it's only dependent on R locked
-        // 18446744073709551615 <- C value at R = 0
-        // 18446744073709551616 <- C value at R = 2^64 <- minimum amount of R to get any C tokens out, but already overflows
+        // with initial_token_a_price == u64::MAX, swap_a_to_b_quadratic always either overflows on the sqrt calculation
+        // or there aren't enough A tokens to get any B tokens out
+        // note this is independent of initial_token_b_value (see below) since it's only dependent on A locked
+        // 18446744073709551615 <- B value at A = 0
+        // 18446744073709551616 <- B value at A = 2^64 <- minimum amount of A to get any B tokens out, but already overflows
         for exp in 0..128 {
             let result = curve.swap_without_fees(
                 2_u128.pow(exp),
@@ -915,11 +928,11 @@ mod tests {
         }
 
         // b -> a (kind of pointless since we can't get here from a -> b but just checking for completeness)
-        // 18446744073709551616 <- C value at R = 2^64 <- minimum amount of R to get any C tokens out, but already overflows
-        // 18446744073709551615 <- C value at R = 0
+        // 18446744073709551616 <- B value at A = 2^64 <- minimum amount of A to get any B tokens out, but already overflows
+        // 18446744073709551615 <- B value at A = 0
         // (diff is 1)
-        // put in 1 C tokens at R = 2^64, should get 2^64 R out
-        // note just like the above, the sqrt calculation overflows even with just 1 CC
+        // put in 1 B tokens at A = 2^64, should get 2^64 A out
+        // note just like the above, the sqrt calculation overflows even with just 1 B
         let result = curve.swap_without_fees(
             1,
             0, // this doesn't matter (it's the amount of token b left but we're going the other direction)
@@ -928,13 +941,13 @@ mod tests {
         );
         assert!(result.is_none());
 
-        // same as above but with a lower token C (doesn't matter though still overflows no matter what C price is)
+        // same as above but with a lower token B (doesn't matter though still overflows no matter what B price is)
 
         let curve = LinearPriceCurve {
             slope_numerator: u64::MAX,
             slope_denominator: u64::MAX - 1,
-            initial_token_r_price: u64::MAX,
-            initial_token_c_price: u32::MAX.into(),
+            initial_token_a_price: u64::MAX,
+            initial_token_b_value: u32::MAX.into(),
         };
 
         // a -> b
@@ -961,23 +974,23 @@ mod tests {
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
     /// some example curves with large numbers (and make sure they return None instead of panicking etc)
     /// They also test that rounding is always not in the user's favor to prevent arbitrage
-    /// Summary: with a pretty high initial_token_r_price at u32::MAX, we overflow at around 2^127 token a swapped
-    /// in, which won't ever be an issue (SPL maxes out at 2^64 supply). See swap_large_price_almost_max_r also
+    /// Summary: with a pretty high initial_token_a_price at u32::MAX, we overflow at around 2^127 token a swapped
+    /// in, which won't ever be an issue (SPL maxes out at 2^64 supply). See swap_large_price_almost_max_a also
     #[test]
-    fn swap_large_price_r_u32() {
-        // example curve with R price relatively low and everything else high
+    fn swap_large_price_a_u32() {
+        // example curve with A price relatively low and everything else high
         let curve = LinearPriceCurve {
             slope_numerator: u64::MAX,
             slope_denominator: u64::MAX - 1,
-            initial_token_r_price: u32::MAX.into(),
-            initial_token_c_price: u64::MAX,
+            initial_token_a_price: u32::MAX.into(),
+            initial_token_b_value: u64::MAX,
         };
 
         // testing a -> b
 
-        // put in 2^64 - 1 R tokens, should move C value from
-        // 18446744073709551615.00 <- C value at R = 0
-        // 18446744076853685892.94 <- C value at R = 2^64 - 1
+        // put in 2^64 - 1 A tokens, should move B value from
+        // 18446744073709551615.00 <- B value at A = 0
+        // 18446744076853685892.94 <- B value at A = 2^64 - 1
         // (diff is 31441_34276.94, should floor down)
         let result = curve.swap_without_fees(
             (u64::MAX).into(),
@@ -995,10 +1008,10 @@ mod tests {
             }
         );
 
-        // this R value causes overflow for this curve (it's relatively pretty close to u128::MAX, about 2^127)
-        // 18446744073709551615.00 <- C value at R = 0
-        // 36893488143124135935.00 <- C value at R = 170141183460469231713240559646469521406
-        // (note due to PreciseNumber only having 12 decimals of precision, the runtime C_end value is
+        // this A value causes overflow for this curve (it's relatively pretty close to u128::MAX, about 2^127)
+        // 18446744073709551615.00 <- B value at A = 0
+        // 36893488143124135935.00 <- B value at A = 170141183460469231713240559646469521406
+        // (note due to PreciseNumber only having 12 decimals of precision, the runtime B_end value is
         // 34.9999 instead of 35.0000 - the runtime is basically using a slope of 1)
         // (runtime diff is 18446_74406_94145_84319.99)
         let result = curve.swap_without_fees(
@@ -1017,7 +1030,7 @@ mod tests {
             }
         );
 
-        // 1 more R and we overflow for this curve (the checked_add in sqrt_babylonian has an overflow and returns None)
+        // 1 more A and we overflow for this curve (the checked_add in sqrt_babylonian has an overflow and returns None)
         let result = curve.swap_without_fees(
             170141183460469231713240559646469521406 + 1,
             0,
@@ -1027,11 +1040,11 @@ mod tests {
         assert!(result.is_none());
 
         // testing b -> a on the same curve
-        // 170141183460469231713240559646469521406 <- R value at C = 36893488143124135935.00
-        // 42535295884924348538429480234146332673.37 <- R value at C = 27670116108416843774 (halfway to initial C)
+        // 170141183460469231713240559646469521406 <- A value at B = 36893488143124135935.00
+        // 42535295884924348538429480234146332673.37 <- A value at B = 27670116108416843774 (halfway to initial B)
         let result = curve
             .swap_without_fees(
-                9223372034707292161, // amount C in = diff between C values
+                9223372034707292161, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 170141183460469231713240559646469521406,
                 TradeDirection::BtoA,
@@ -1044,17 +1057,17 @@ mod tests {
             // note because PreciseNumber only has 12 decimals (and our slope doesn't round evenly
             // to 12 decimals) this is slightly different than the exact amount of
             // 127605887575544883174811079412323188733
-            127605887575544883165587707373320929277 // amount R out = diff between R values
+            127605887575544883165587707373320929277 // amount A out = diff between A values
         );
 
-        // now (with actual R numbers above), swap balance is 42535295884924348538429480234146332674
-        // 42535295884924348538429480234146332674 <- R value at C = 27670116108416843773.25
-        //  (using the rounded R value from above to make sure the rounding doesn't cause any compounding issues)
-        // 10633823981134607446584569249589624832.09 <- R value at C = 23058430091063197695
+        // now (with actual A numbers above), swap balance is 42535295884924348538429480234146332674
+        // 42535295884924348538429480234146332674 <- A value at B = 27670116108416843773.25
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 10633823981134607446584569249589624832.09 <- A value at B = 23058430091063197695
         //  (another halfway down to initial)
         let result = curve
             .swap_without_fees(
-                4611686017353646078, // amount C in = diff between C values
+                4611686017353646078, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 42535295884924348538429480234146332674,
                 TradeDirection::BtoA,
@@ -1066,17 +1079,17 @@ mod tests {
             result.destination_amount_swapped,
             // same note as above - slightly off from exact amount of
             // 31901471903789741091844910984556707842
-            31901471903789741082621538941259481089 // amount R out = diff between R values
+            31901471903789741082621538941259481089 // amount A out = diff between A values
         );
 
-        // now (with actual R numbers above), swap balance is 10633823981134607451196255271238238208
-        // 10633823981134607451196255271238238208 <- R value at C = 23058430091063197694.125
-        // 0 <- R value at C = c initial
+        // now (with actual A numbers above), swap balance is 10633823981134607451196255271238238208
+        // 10633823981134607451196255271238238208 <- A value at B = 23058430091063197694.125
+        // 0 <- A value at B = b initial
         let result = curve
             .swap_without_fees(
                 // note due to sqrt rounding this requires a bit more than the actual amount
                 // we could get closer to real value of 23058430091063197694 if we pad some precision to sqrt
-                23058430091063197697 - (u64::MAX as u128), // amount C in = diff between C values
+                23058430091063197697 - (u64::MAX as u128), // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 10633823981134607451196255271238238208,
                 TradeDirection::BtoA,
@@ -1089,7 +1102,7 @@ mod tests {
         );
         assert_eq!(
             result.destination_amount_swapped,
-            10633823981134607451196255271238238208 // amount R out = diff between R values
+            10633823981134607451196255271238238208 // amount A out = diff between A values
         );
 
         // note we got out 18446744069414584319 b tokens at the end of a->b and
@@ -1108,7 +1121,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            23058430091063197697 - (u64::MAX as u128) // should still only take this much C
+            23058430091063197697 - (u64::MAX as u128) // should still only take this much B
         );
         assert_eq!(
             result.destination_amount_swapped,
@@ -1119,21 +1132,21 @@ mod tests {
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
     /// some example curves with large numbers (and make sure they return None instead of panicking etc)
     /// They also test that rounding is always not in the user's favor to prevent arbitrage
-    /// Summary: with a very high initial_token_r_price at u64::MAX - 100, we overflow at around 2^70 token a swapped
+    /// Summary: with a very high initial_token_a_price at u64::MAX - 100, we overflow at around 2^70 token a swapped
     /// in, which won't ever be an issue (SPL maxes out at 2^64 supply).
     #[test]
-    fn swap_large_price_almost_max_r() {
-        // example curve with R price a little lower than u64 MAX and everything else high
+    fn swap_large_price_almost_max_a() {
+        // example curve with A price a little lower than u64 MAX and everything else high
         let curve = LinearPriceCurve {
             slope_numerator: u64::MAX,
             slope_denominator: u64::MAX - 1,
-            initial_token_r_price: u64::MAX - 100,
-            initial_token_c_price: u64::MAX,
+            initial_token_a_price: u64::MAX - 100,
+            initial_token_b_value: u64::MAX,
         };
 
-        // 2^70 R is about where this curve overflows
-        // 18446744073709551615.00 <- C value at R = 0
-        // 18446744073709551679.00 <- C value at R = 2^70
+        // 2^70 A is about where this curve overflows
+        // 18446744073709551615.00 <- B value at A = 0
+        // 18446744073709551679.00 <- B value at A = 2^70
         // diff is 64
         let result = curve.swap_without_fees(
             2u128.pow(70),
@@ -1160,10 +1173,10 @@ mod tests {
 
         // testing b -> a on the same curve
 
-        // put all 64 CC back in, should get all 2^70 out
+        // put all 64 B back in, should get all 2^70 out
         let result = curve
             .swap_without_fees(
-                64, // amount C in = diff between C values
+                64, // amount B in = diff between B values
                 0,  // this doesn't matter (amt of token b left but we're going the other direction)
                 1180591620717411303424,
                 TradeDirection::BtoA,
@@ -1175,13 +1188,13 @@ mod tests {
             result.destination_amount_swapped,
             // note this rounds down due to sqrt rounding, we could get closer to desired behavior
             // of returning all the token b if we pad some precision to sqrt
-            1162144876643701751908 // amount R out = diff between R values
+            1162144876643701751908 // amount A out = diff between A values
         );
 
         // putting in one extra token b does return all the token a though
         let result = curve
             .swap_without_fees(
-                65, // amount C in = diff between C values
+                65, // amount B in = diff between B values
                 0,  // this doesn't matter (amt of token b left but we're going the other direction)
                 1180591620717411303424,
                 TradeDirection::BtoA,
@@ -1191,19 +1204,19 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 65);
         assert_eq!(
             result.destination_amount_swapped,
-            1180591620717411303424 // amount R out = diff between R values
+            1180591620717411303424 // amount A out = diff between A values
         );
 
         // since this curve has a very drastic a:b ratio, the rounding errors can compound
         // from swap to swap so make sure we don't round in favor of the user
-        // e.g. if we used c_end directly instead of c_end.ceiling() in swap_b_to_a, we'd
-        // get all the RLY out with only 63 CC instead of 64 with the below 32 -> 16 -> 16 txns
+        // e.g. if we used b_end directly instead of b_end.ceiling() in swap_b_to_a, we'd
+        // get all the A out with only 63 B instead of 64 with the below 32 -> 16 -> 16 txns
 
-        // 1180591620717411303424.00 <- R value at C = 18446744073709551679
-        // 590295810358705648992.00 <- R value at C = 18446744073709551647 (halfway to initial C)
+        // 1180591620717411303424.00 <- A value at B = 18446744073709551679
+        // 590295810358705648992.00 <- A value at B = 18446744073709551647 (halfway to initial B)
         let result = curve
             .swap_without_fees(
-                32, // amount C in = diff between C values
+                32, // amount B in = diff between B values
                 0,  // this doesn't matter (amt of token b left but we're going the other direction)
                 1180591620717411303424,
                 TradeDirection::BtoA,
@@ -1215,14 +1228,14 @@ mod tests {
             result.destination_amount_swapped,
             // note this rounds down due to sqrt rounding, we could get closer to real value of
             // 590295810358705654432 if we pad some precision to sqrt
-            571849066284996102884 // amount R out = diff between R values
+            571849066284996102884 // amount A out = diff between A values
         );
 
-        // 590295810358705648992 <- R value at C = 18446744073709551647.00...
-        // 295147905179352824368.00 <- R value at C = 18446744073709551631
+        // 590295810358705648992 <- A value at B = 18446744073709551647.00...
+        // 295147905179352824368.00 <- A value at B = 18446744073709551631
         let result = curve
             .swap_without_fees(
-                16, // amount C in = diff between C values
+                16, // amount B in = diff between B values
                 0,  // this doesn't matter (amt of token b left but we're going the other direction)
                 590295810358705648992,
                 TradeDirection::BtoA,
@@ -1234,16 +1247,16 @@ mod tests {
             result.destination_amount_swapped,
             // note this rounds down due to sqrt rounding, we could get closer to real value of
             // 295147905179352824624 if we pad some precision to sqrt
-            276701161105643273092 // amount R out = diff between R values
+            276701161105643273092 // amount A out = diff between A values
         );
 
-        // 295147905179352824368 <- R value at C = 18446744073709551631
-        // 0 <- R value at C = c initial 18446744073709551615 (u64 MAX)
+        // 295147905179352824368 <- A value at B = 18446744073709551631
+        // 0 <- A value at B = b initial 18446744073709551615 (u64 MAX)
         let result = curve
             .swap_without_fees(
                 // note due to sqrt rounding this requires 1 more token b than the actual amount
                 // we could get closer to real value of 16 if we pad some precision to sqrt
-                17, // amount C in = diff between C values
+                17, // amount B in = diff between B values
                 0,  // this doesn't matter (amt of token b left but we're going the other direction)
                 295147905179352824368,
                 TradeDirection::BtoA,
@@ -1253,7 +1266,7 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 17);
         assert_eq!(
             result.destination_amount_swapped,
-            295147905179352824368 // amount R out = diff between R values
+            295147905179352824368 // amount A out = diff between A values
         );
 
         // same as above but with a huge token b, make sure we only take the required amount
@@ -1268,7 +1281,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            17 // should still only take this much C
+            17 // should still only take this much B
         );
         assert_eq!(result.destination_amount_swapped, 295147905179352824368);
     }
@@ -1280,19 +1293,19 @@ mod tests {
     /// limit of 12 decimals of precision will cause rounding well below the exact solution
     #[test]
     fn swap_large_price_low_slope_u128() {
-        // example curve with lowest possible slope and 0 starting R price (costs very little R to get a lot of C out)
+        // example curve with lowest possible slope and 0 starting A price (costs very little A to get a lot of B out)
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             // since PreciseNumber only has 12 decimals of precision, anything that
             // doesn't divide evenly or is < 1e-12 will be treated as 0 slope
             // (see swap_too_low_slope_workaround_example below for smaller slopes/more precision)
             slope_denominator: 1_000_000_000_000,
-            initial_token_r_price: 0,
-            initial_token_c_price: u64::MAX.into(),
+            initial_token_a_price: 0,
+            initial_token_b_value: u64::MAX.into(),
         };
 
-        // 18446744073709551615.00 <- C value at R = 0
-        // 18446744073710965828.56 <- C value at R = 1
+        // 18446744073709551615.00 <- B value at A = 0
+        // 18446744073710965828.56 <- B value at A = 1
         // diff is 1414213.56
         let result = curve.swap_without_fees(1, 0, u128::MAX - 1, TradeDirection::AtoB);
         assert_eq!(
@@ -1303,8 +1316,8 @@ mod tests {
             }
         );
 
-        // 18446744073709551615.00 <- C value at R = 0
-        // 26087654097409638134250758.61 <- C value at R = 2^128-1
+        // 18446744073709551615.00 <- B value at A = 0
+        // 26087654097409638134250758.61 <- B value at A = 2^128-1
         let result = curve.swap_without_fees(u128::MAX, 0, u128::MAX - 1, TradeDirection::AtoB);
         assert_eq!(
             result.unwrap(),
@@ -1318,10 +1331,10 @@ mod tests {
 
         // testing b -> a on the same curve
 
-        // put all 26087635650665000000000000 CC back in, should get all u128 max out
+        // put all 26087635650665000000000000 B back in, should get all u128 max out
         let result = curve
             .swap_without_fees(
-                26087635650665000000000000, // amount C in = diff between C values
+                26087635650665000000000000, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 u128::MAX,
                 TradeDirection::BtoA,
@@ -1333,16 +1346,16 @@ mod tests {
             result.destination_amount_swapped,
             // due to u128 sqrt precision, this is slightly rounded down from exact value of
             // 340282366920938463463374607431768211455 (u128 max max)
-            340282366920938463463374606931768211455 // amount R out = diff between R values
+            340282366920938463463374606931768211455 // amount A out = diff between A values
         );
 
-        // 128::MAX <- R value at C = 26087654097409638134250758.61
-        // (this C is just for swap's bookkeeping so no need to match the value above,
-        // as long as the total C swapped at the end makes sense it's okay)
-        // 85070591730230934739367778125000000000 <- R value at C = 13043836272076573709551615 (halfway to initial C)
+        // 128::MAX <- A value at B = 26087654097409638134250758.61
+        // (this B is just for swap's bookkeeping so no need to match the value above,
+        // as long as the total B swapped at the end makes sense it's okay)
+        // 85070591730230934739367778125000000000 <- A value at B = 13043836272076573709551615 (halfway to initial B)
         let result = curve
             .swap_without_fees(
-                13043817825333064424699143, // amount C in = diff between C values
+                13043817825333064424699143, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 u128::MAX,
                 TradeDirection::BtoA,
@@ -1354,17 +1367,17 @@ mod tests {
             result.destination_amount_swapped,
             // due to u128 sqrt precision, this is slightly off from exact value of
             // 255211775190707528724006829306768211455
-            255211775190701847159133236108741730144 // amount R out = diff between R values
+            255211775190701847159133236108741730144 // amount A out = diff between A values
         );
 
-        // now (with actual R numbers above), swap balance is 85070591730236616304241371323026481311
-        // 85070591730236616304241371323026481311 <- R value at C = 13043836272077009284852472.00
-        //  (using the rounded R value from above to make sure the rounding doesn't cause any compounding issues)
-        // 21267647932555893121604012982817251446.44 <- R value at C = 6521927359410041497202044
+        // now (with actual A numbers above), swap balance is 85070591730236616304241371323026481311
+        // 85070591730236616304241371323026481311 <- A value at B = 13043836272077009284852472.00
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 21267647932555893121604012982817251446.44 <- A value at B = 6521927359410041497202044
         //  (another halfway down to initial)
         let result = curve
             .swap_without_fees(
-                6521908912666967787650428, // amount C in = diff between C values
+                6521908912666967787650428, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 85070591730236616304241371323026481311,
                 TradeDirection::BtoA,
@@ -1376,18 +1389,18 @@ mod tests {
             result.destination_amount_swapped,
             // same note as above - slightly off from exact amount of
             // 63802943797680723182637358340209229865
-            63802943797680303010617821782897184626 // amount R out = diff between R values
+            63802943797680303010617821782897184626 // amount A out = diff between A values
         );
 
-        // now (with actual R numbers above), swap balance is 21267647932556313293623549540129296685
-        // 21267647932556313293623549540129296685 <- R value at C = 6521927359410105921901187.00
-        // 0 <- R value at C = c initial (18446744073709551615)
-        // (due to u128 sqrt rounding though, we need to use a bit more C to exactly
-        // swap out all the R, i.e. c initial + 6521908912667000000000000 instead of
+        // now (with actual A numbers above), swap balance is 21267647932556313293623549540129296685
+        // 21267647932556313293623549540129296685 <- A value at B = 6521927359410105921901187.00
+        // 0 <- A value at B = b initial (18446744073709551615)
+        // (due to u128 sqrt rounding though, we need to use a bit more B to exactly
+        // swap out all the A, i.e. b initial + 6521908912667000000000000 instead of
         // 6521908912666032212349572)
         let result = curve
             .swap_without_fees(
-                6521908912667000000000000, // amount C in = diff between C values
+                6521908912667000000000000, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 21267647932556313293623549540129296685,
                 TradeDirection::BtoA,
@@ -1397,7 +1410,7 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 6521908912667000000000000);
         assert_eq!(
             result.destination_amount_swapped,
-            21267647932556313293623549540129296685 // amount R out = diff between R values
+            21267647932556313293623549540129296685 // amount A out = diff between A values
         );
 
         // note we got out 26087635650665000000000000 b tokens at the end of a->b and
@@ -1416,7 +1429,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            6521908912667000000000000 // should still only take this much C
+            6521908912667000000000000 // should still only take this much B
         );
         assert_eq!(
             result.destination_amount_swapped,
@@ -1427,7 +1440,7 @@ mod tests {
     /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
     /// some example curves with large numbers (and make sure they return None instead of panicking etc)
     /// They also test that rounding is always not in the user's favor to prevent arbitrage
-    /// This is similar to swap_large_price_low_slope_u128 but with a more realistic curve (initial_token_c_price is
+    /// This is similar to swap_large_price_low_slope_u128 but with a more realistic curve (initial_token_b_value is
     /// 0 instead of u64::MAX)
     #[test]
     fn swap_large_price_low_slope_u64() {
@@ -1436,12 +1449,12 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 1_000_000_000_000,
-            initial_token_r_price: 0,
-            initial_token_c_price: 0,
+            initial_token_a_price: 0,
+            initial_token_b_value: 0,
         };
 
-        // 0 <- C value at R = 0
-        // 6074000999952099.38 <- C value at R = 2^64-1
+        // 0 <- B value at A = 0
+        // 6074000999952099.38 <- B value at A = 2^64-1
         let result =
             curve.swap_without_fees(u64::MAX.into(), 0, u128::MAX - 1, TradeDirection::AtoB);
         assert_eq!(
@@ -1456,10 +1469,10 @@ mod tests {
 
         // testing b -> a on the same curve
 
-        // put all 6074000000000000 CC back in, should get all u64 max out
+        // put all 6074000000000000 B back in, should get all u64 max out
         let result = curve
             .swap_without_fees(
-                6074000000000000, // amount C in = diff between C values
+                6074000000000000, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 u64::MAX.into(),
                 TradeDirection::BtoA,
@@ -1471,19 +1484,19 @@ mod tests {
             result.destination_amount_swapped,
             // due to u128 sqrt precision, this is slightly rounded down from exact value of
             // 18446744073709551615 (u64 max)
-            18446743573709551615 // amount R out = diff between R values
+            18446743573709551615 // amount A out = diff between A values
         );
 
-        // swap from initial R locked of u64 max all the way down to 0 - make sure
+        // swap from initial A locked of u64 max all the way down to 0 - make sure
         // any rounding is not in user's favor to prevent arbitrage
 
-        // u64 max <- R value at C = 6074000999952099
-        // (this C is just for swap's bookkeeping so no need to match the 6074000000000000 above,
-        // as long as the total C swapped at the end makes sense it's okay)
-        // 4611684500000000000 <- R value at C = 3037000000000000 (~halfway to initial C)
+        // u64 max <- A value at B = 6074000999952099
+        // (this B is just for swap's bookkeeping so no need to match the 6074000000000000 above,
+        // as long as the total B swapped at the end makes sense it's okay)
+        // 4611684500000000000 <- A value at B = 3037000000000000 (~halfway to initial B)
         let result = curve
             .swap_without_fees(
-                3037000999952099, // amount C in = diff between C values
+                3037000999952099, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 u64::MAX.into(),
                 TradeDirection::BtoA,
@@ -1495,17 +1508,17 @@ mod tests {
             result.destination_amount_swapped,
             // due to u128 sqrt precision, this is slightly off from exact value of
             // 13835059573709551615
-            13832025111563528424 // amount R out = diff between R values
+            13832025111563528424 // amount A out = diff between A values
         );
 
-        // now (with actual R numbers above), swap balance is 4614718962146023191
-        // 4614718962146023191 <- R value at C = 3037999000047901.00
-        //  (using the rounded R value from above to make sure the rounding doesn't cause any compounding issues)
-        // 1152921125000000000 <- R value at C = 1518500000000000
+        // now (with actual A numbers above), swap balance is 4614718962146023191
+        // 4614718962146023191 <- A value at B = 3037999000047901.00
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 1152921125000000000 <- A value at B = 1518500000000000
         //  (another halfway down to initial)
         let result = curve
             .swap_without_fees(
-                1519499000047901, // amount C in = diff between C values
+                1519499000047901, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 4614718962146023191,
                 TradeDirection::BtoA,
@@ -1517,17 +1530,17 @@ mod tests {
             result.destination_amount_swapped,
             // same note as above - slightly off from exact amount of
             // 3461797837146023191
-            3461796318718260907 // amount R out = diff between R values
+            3461796318718260907 // amount A out = diff between A values
         );
 
-        // now (with actual R numbers above), swap balance is 1152922643427762284
-        // 1152922643427762284 <- R value at C = 1518500999952099
-        // (due to u128 sqrt rounding though, we need to use C = 1519000000000000 to exactly
-        // swap out all the R)
-        // 0 <- R value at C = 0 (c initial)
+        // now (with actual A numbers above), swap balance is 1152922643427762284
+        // 1152922643427762284 <- A value at B = 1518500999952099
+        // (due to u128 sqrt rounding though, we need to use B = 1519000000000000 to exactly
+        // swap out all the A)
+        // 0 <- A value at B = 0 (b initial)
         let result = curve
             .swap_without_fees(
-                1519000000000000, // amount C in = diff between C values
+                1519000000000000, // amount B in = diff between B values
                 0, // this doesn't matter (amt of token b left but we're going the other direction)
                 1152922643427762284,
                 TradeDirection::BtoA,
@@ -1537,7 +1550,7 @@ mod tests {
         assert_eq!(result.source_amount_swapped, 1519000000000000);
         assert_eq!(
             result.destination_amount_swapped,
-            1152922643427762284 // amount R out = diff between R values
+            1152922643427762284 // amount A out = diff between A values
         );
 
         // note we got out 6074000000000000 b tokens at the end of a->b and
@@ -1556,7 +1569,7 @@ mod tests {
 
         assert_eq!(
             result.source_amount_swapped,
-            1519000000000000 // should still only take this much C
+            1519000000000000 // should still only take this much B
         );
         assert_eq!(result.destination_amount_swapped, 1152922643427762284);
     }
@@ -1568,8 +1581,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 0,
             slope_denominator: 1_000_000_000_001,
-            initial_token_r_price: 1,
-            initial_token_c_price: 1,
+            initial_token_a_price: 1,
+            initial_token_b_value: 1,
         };
         assert!(!curve.validate().is_ok());
 
@@ -1577,8 +1590,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 0,
-            initial_token_r_price: 1,
-            initial_token_c_price: 1,
+            initial_token_a_price: 1,
+            initial_token_b_value: 1,
         };
         assert!(!curve.validate().is_ok());
 
@@ -1586,8 +1599,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 1_000_000_000_001,
-            initial_token_r_price: 1,
-            initial_token_c_price: 1,
+            initial_token_a_price: 1,
+            initial_token_b_value: 1,
         };
         assert!(!curve.validate().is_ok());
 
@@ -1595,8 +1608,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 1_000_000_000_000,
-            initial_token_r_price: 1,
-            initial_token_c_price: 1,
+            initial_token_a_price: 1,
+            initial_token_b_value: 1,
         };
         assert!(curve.validate().is_ok());
     }
@@ -1609,31 +1622,31 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 10_000_000_000_000,
-            initial_token_r_price: 2,
-            initial_token_c_price: u64::MAX.into(),
+            initial_token_a_price: 2,
+            initial_token_b_value: u64::MAX.into(),
         };
 
-        // 18446744073709551615.00 <- C value at R = 0
-        // 18446744073754272974.55 <- C value at R = 100
+        // 18446744073709551615.00 <- B value at A = 0
+        // 18446744073754272974.55 <- B value at A = 100
         // diff is 44721359.55 (but doesn't work)
         let result =
             curve.swap_without_fees(100, 0, 1_00000_00000_00000_00000, TradeDirection::AtoB);
         assert!(result.is_none());
 
-        // as a workaround, we can scale slope and R token amounts (similar to when we give both R and C
+        // as a workaround, we can scale slope and A token amounts (similar to when we give both A and B
         // extra decimals of precision - more examples in swap_a_to_b_basic too)
         let curve = LinearPriceCurve {
             slope_numerator: 1_000_000_000_000_000_000, // slope scaled by 1e18
             slope_denominator: 10_000_000_000_000, // (obviously we could reduce this slope but just illustrative)
-            initial_token_r_price: 2, // no need to scale this (it's still 50 base RLY for 1 base CC)
-            initial_token_c_price: u64::MAX.into(),
+            initial_token_a_price: 2, // no need to scale this (it's still 50 base A for 1 base B)
+            initial_token_b_value: u64::MAX.into(),
         };
 
-        // 18446744073709551615.00 <- C value at R = 0
-        // 18446744073714023750.95 <- C value at R = 100_000_000_000_000
+        // 18446744073709551615.00 <- B value at A = 0
+        // 18446744073714023750.95 <- B value at A = 100_000_000_000_000
         // diff is 44721359.55 (works now)
         let result = curve.swap_without_fees(
-            100_000_000_000_000_000_000, // R values also scaled by 1e18
+            100_000_000_000_000_000_000, // A values also scaled by 1e18
             0,
             1_00000_00000_00000_00000,
             TradeDirection::AtoB,
@@ -1642,7 +1655,7 @@ mod tests {
             result.unwrap(),
             SwapWithoutFeesResult {
                 source_amount_swapped: 100_000_000_000_000_000_000,
-                destination_amount_swapped: 44721359 // C value doesn't need any scaling
+                destination_amount_swapped: 44721359 // B value doesn't need any scaling
             }
         );
     }
@@ -1655,8 +1668,8 @@ mod tests {
         let curve = LinearPriceCurve {
             slope_numerator: 1,
             slope_denominator: 1_000_000_000_000,
-            initial_token_r_price: 0,
-            initial_token_c_price: 0,
+            initial_token_a_price: 0,
+            initial_token_b_value: 0,
         };
         let starting_supply_b: u128 = 10_000_000;
         // swap at least `step` tokens at a time, can tweak this if it takes a lot of token a to get out 1 token b
@@ -1709,7 +1722,7 @@ mod tests {
             // usually (for small slope curves), it takes a lot of b to get back 1 a,
             // so just precalculate a reasonable starting point instead of starting from 1
             let current_b_value = curve
-                .c_value_with_amt_r_locked_quadratic(
+                .b_value_with_amt_a_locked_quadratic(
                     &(PreciseNumber::new(swap_supply_a).unwrap()),
                     false,
                 )
@@ -1718,7 +1731,7 @@ mod tests {
                 .unwrap();
 
             let next_b_value = curve
-                .c_value_with_amt_r_locked_quadratic(
+                .b_value_with_amt_a_locked_quadratic(
                     &(PreciseNumber::new(swap_supply_a - 1).unwrap()),
                     true,
                 )
@@ -1785,8 +1798,8 @@ mod tests {
             let curve = LinearPriceCurve {
                 slope_numerator: 1,
                 slope_denominator: 1_000_000_000_000,
-                initial_token_r_price: 0,
-                initial_token_c_price: 0,
+                initial_token_a_price: 0,
+                initial_token_b_value: 0,
             };
 
             let (_source_amount_swapped, destination_amount_swapped) = curve
@@ -1825,8 +1838,8 @@ mod tests {
             let curve = LinearPriceCurve {
                 slope_numerator: 1,
                 slope_denominator: 1_000_000_000_000,
-                initial_token_r_price: 0,
-                initial_token_c_price: 0,
+                initial_token_a_price: 0,
+                initial_token_b_value: 0,
             };
 
             let (_source_amount_swapped, destination_amount_swapped) = curve

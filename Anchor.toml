@@ -1,5 +1,5 @@
 [programs.localnet]
-anchor_token_swap = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+anchor_token_swap = "TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq"
 
 [registry]
 url = "https://anchor.projectserum.com"
@@ -9,7 +9,7 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-# test = "./node_modules/ts-mocha/bin/ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "./node_modules/ts-mocha/bin/ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 # `anchor test` looks for a specific hardcoded script called "test" (and anchor-cli::start_test_validator isn't publicly
 # callable outside of `anchor test`), so just comment/uncomment this as needed for debugger
-test = "./node_modules/ts-mocha/bin/ts-mocha --inspect-brk -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+# test = "./node_modules/ts-mocha/bin/ts-mocha --inspect-brk -p ./tsconfig.json -t 1000000 tests/**/*.ts"

@@ -85,9 +85,6 @@ mod anchor_token_swap {
                     slope_numerator,
                     slope_denominator,
                     initial_token_a_price,
-                    // TODO: initial_token_b_value isn't needed so we can remove it entirely, just doing this
-                    // for now to lock in the interface
-                    initial_token_b_value: 0,
                 }),
             },
         )

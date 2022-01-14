@@ -366,12 +366,14 @@ describe('anchor-token-swap', () => {
     // example curve - 0.5 slope (i.e. price increases by "1 base RLY per base CC" for every 2 display CC AKA 2e8 CC), starting price of 50 RLY at 300 (display) CC
     let slope_numerator = new anchor.BN(1);
     let slope_denominator = new anchor.BN(200000000);
-    let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let r0_numerator = new anchor.BN(150);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let r0_denominator = new anchor.BN(3);  // not reducing to test out division
 
     const tx = await program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
-      r0,
+      r0_numerator,
+      r0_denominator,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
@@ -641,13 +643,15 @@ describe('anchor-token-swap', () => {
     // example curve - 0.5 slope (i.e. price increases by "1 base RLY per base CC" for every 2 display CC AKA 2e8 CC), starting price of 50 RLY at 300 (display) CC
     let slope_numerator = new anchor.BN(1);
     let slope_denominator = new anchor.BN(200000000);
-    let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let r0_numerator = new anchor.BN(150);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let r0_denominator = new anchor.BN(3);  // not reducing to test out division
 
     // zero token B on init should fail 
     await assert.rejects(program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
-      r0,
+      r0_numerator,
+      r0_denominator,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
@@ -669,7 +673,8 @@ describe('anchor-token-swap', () => {
     await assert.rejects(program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
-      r0,
+      r0_numerator,
+      r0_denominator,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,
@@ -710,12 +715,14 @@ describe('anchor-token-swap', () => {
     // example curve - 0.5 slope (i.e. price increases by "1 base RLY per base CC" for every 2 display CC AKA 2e8 CC), starting price of 50 RLY at 300 (display) CC
     let slope_numerator = new anchor.BN(1);
     let slope_denominator = new anchor.BN(200000000);
-    let r0 = new anchor.BN(50);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let r0_numerator = new anchor.BN(150);  // since R and C both have 8 decimals, we don't need to do any scaling here (starts at 50 base RLY price for every 1 base CC)
+    let r0_denominator = new anchor.BN(3);  // not reducing to test out division
 
     const tx = await program.rpc.initializeLinearPrice(
       slope_numerator,
       slope_denominator,
-      r0,
+      r0_numerator,
+      r0_denominator,
       {
         accounts: {
           tokenSwap: tokenSwap.publicKey,

@@ -63,7 +63,8 @@ mod anchor_token_swap {
         ctx: Context<Initialize>,
         slope_numerator: u64,
         slope_denominator: u64,
-        initial_token_a_price: u64,
+        initial_token_a_price_numerator: u64,
+        initial_token_a_price_denominator: u64,
     ) -> ProgramResult {
         // just hardcode fees to 0 for linear curve, we don't support those right now (would require implementing
         // some withdraw logic to calculate the fees during swap)
@@ -84,7 +85,8 @@ mod anchor_token_swap {
                 calculator: Box::new(curve::linear_price::LinearPriceCurve {
                     slope_numerator,
                     slope_denominator,
-                    initial_token_a_price,
+                    initial_token_a_price_numerator,
+                    initial_token_a_price_denominator,
                 }),
             },
         )

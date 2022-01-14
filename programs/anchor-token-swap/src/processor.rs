@@ -1,6 +1,6 @@
 //! Program state processor
 
-use crate::constraints::{SwapConstraints, SWAP_CONSTRAINTS};
+use crate::constraints::SwapConstraints;
 use crate::{
     curve::{
         base::SwapCurve,

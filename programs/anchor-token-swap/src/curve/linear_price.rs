@@ -1555,6 +1555,147 @@ mod tests {
         assert_eq!(result.destination_amount_swapped, 1152921507662031752);
     }
 
+    /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// Summary: Similar to swap_large_price_max_a, we overflow sqrt before we can get any tokens out
+    #[test]
+    fn swap_maximum_slope() {
+        // curve with slope = u64::MAX
+        let curve = LinearPriceCurve {
+            slope_numerator: u64::MAX,
+            slope_denominator: 1,
+            initial_token_a_price_numerator: u64::MAX - 1,
+            initial_token_a_price_denominator: u64::MAX,
+        };
+
+        for exp in 0..128 {
+            let result = curve.swap_without_fees(
+                2_u128.pow(exp),
+                0,
+                1_00000_00000_00000_00000,
+                TradeDirection::AtoB,
+            );
+            assert!(result.is_none());
+        }
+    }
+
+    /// These swap_large_price_foo tests all test the overflow boundaries of u64/u128 test - mostly just to give
+    /// some example curves with large numbers (and make sure they return None instead of panicking etc)
+    /// They also test that rounding is always not in the user's favor to prevent arbitrage
+    /// Summary: At slightly lower slope than max, we can at least get a little token B out before overflowing,
+    /// how much depends how close to u64::MAX the slope is. The rounding errors are very drastic at this high
+    /// slope though
+    #[test]
+    fn swap_very_large_slope() {
+        // curve with slope = 2^59 (this is about the max slope to get > 4 B tokens out before overflowing - makes
+        // for a better b->a test below)
+        let curve = LinearPriceCurve {
+            slope_numerator: 2u64.pow(59),
+            slope_denominator: 1,
+            initial_token_a_price_numerator: u64::MAX - 1,
+            initial_token_a_price_denominator: u64::MAX,
+        };
+
+        // testing a -> b
+
+        // put in 2^64 - 1 A tokens, should move B value from
+        // 0 <- B value at A = 0
+        // 7.99 <- B value at A = 2^64 - 1 (should floor down)
+        let result = curve.swap_without_fees(
+            (u64::MAX).into(),
+            0,
+            1_00000_00000_00000_00000,
+            TradeDirection::AtoB,
+        );
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: u64::MAX.into(),
+                destination_amount_swapped: 7
+            }
+        );
+
+        // testing b -> a on the same curve
+        // 18446744073709551615 <- A value at B = 7.99
+        // 4611686018427387908.00 <- A value at B = 4
+        let result = curve
+            .swap_without_fees(
+                3, // amount B in = diff between B values
+                0, // this doesn't matter (amt of token b left but we're going the other direction)
+                18446744073709551615,
+                TradeDirection::BtoA,
+            )
+            .unwrap();
+
+        assert_eq!(result.source_amount_swapped, 3);
+        assert_eq!(
+            result.destination_amount_swapped,
+            // note because of the drastic slope, the rounding error is a lot from the exact value of
+            // 13835058055282163707
+            11240984669916758010 // amount A out = diff between A values
+        );
+
+        // now (with actual A numbers above), swap balance is 7205759403792793605
+        // 7205759403792793605 <- A value at B = 5.00
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 1152921504606846978.00 <- A value at B = 2
+        let result = curve
+            .swap_without_fees(
+                2, // amount B in = diff between B values
+                0, // this doesn't matter (amt of token b left but we're going the other direction)
+                7205759403792793605,
+                TradeDirection::BtoA,
+            )
+            .unwrap();
+
+        assert_eq!(result.source_amount_swapped, 2);
+        assert_eq!(
+            result.destination_amount_swapped,
+            // same note as above - rounded off from exact amount of
+            // 6052837899185946627
+            4611686018427387906 // amount A out = diff between A values
+        );
+
+        // now (with actual A numbers above), swap balance is 2594073385365405699
+        // 2594073385365405699 <- A value at B = 3.00
+        // 0 <- A value at B = 0
+        let result = curve
+            .swap_without_fees(
+                3, // amount B in = diff between B values
+                0, // this doesn't matter (amt of token b left but we're going the other direction)
+                2594073385365405699,
+                TradeDirection::BtoA,
+            )
+            .unwrap();
+
+        assert_eq!(result.source_amount_swapped, 3);
+        assert_eq!(
+            result.destination_amount_swapped,
+            2594073385365405699 // amount A out = diff between A values
+        );
+
+        // note we got out 7 b tokens at the end of a->b and
+        // we put in 8 b tokens at the end of b->a (to get all the a back
+        // out) - it's off by 1 since we rounded such that there's no arbitrage opportunity
+
+        // same as above but with a huge token b, make sure we only take the required amount
+        let result = curve
+            .swap_without_fees(
+                u128::MAX, // way more token b than needed to get all the token a out
+                0, // this doesn't matter (amt of token b left but we're going the other direction)
+                2594073385365405699,
+                TradeDirection::BtoA,
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.source_amount_swapped,
+            3 // should still only take this much B
+        );
+        assert_eq!(result.destination_amount_swapped, 2594073385365405699);
+    }
+
     /// Tests curve.validate() will reject invalid curves
     #[test]
     fn swap_is_slope_valid() {

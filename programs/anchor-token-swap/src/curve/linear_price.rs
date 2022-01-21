@@ -12,6 +12,7 @@ use {
             map_zero_to_none, CurveCalculator, DynPack, RoundDirection, SwapWithoutFeesResult,
             TradeDirection, TradingTokenResult,
         },
+        dfs_precise_number::PreciseNumber,
         error::SwapError,
     },
     arrayref::{array_mut_ref, array_ref},
@@ -86,57 +87,10 @@ fn solve_quadratic_positive_root(
         .checked_div(&e_value_denominator)?
         .checked_add(&four_k_lhs)?;
 
-    // note we have to use u128 sqrt below since PreciseNumber::sqrt is really expensive (~100K compute vs ~50K compute)
-    let sqrt_e2_plus_4_k_lhs;
-    if e2_plus_4_k_lhs.less_than(&(PreciseNumber::new(1)?)) {
-        // PreciseNumber's out of the box sqrt is too inaccurate for numbers < 1, add as many
-        // decimals as we can fit into u128 (12 max from PreciseNumber + 26) and then do it manually
-        // TODO: this would be cleaner if we also encapsulated it into DFSPreciseNumber.sqrt
-        let e2_plus_4_k_lhs_padded = e2_plus_4_k_lhs
-            .checked_mul(&(PreciseNumber::new(100_0000_0000_0000_0000_0000_0000)?))?;
-        let e2_plus_4_k_lhs_padded_u128 = e2_plus_4_k_lhs_padded.to_imprecise()?;
-        let sqrt_e2_plus_4_k_lhs_padded_u128 = sqrt_babylonian(e2_plus_4_k_lhs_padded_u128)?;
-
-        let sqrt_e2_plus_4_k_lhs_padded_unrounded =
-            PreciseNumber::new(sqrt_e2_plus_4_k_lhs_padded_u128)?;
-
-        // unpad by dividing result by 13 decimals
-        let sqrt_e2_plus_4_k_lhs_unrounded = sqrt_e2_plus_4_k_lhs_padded_unrounded
-            .checked_div(&(PreciseNumber::new(10_0000_0000_0000)?))?;
-
-        let is_not_perfect_square = sqrt_e2_plus_4_k_lhs_padded_unrounded
-            .checked_mul(&sqrt_e2_plus_4_k_lhs_padded_unrounded)?
-            .less_than(&e2_plus_4_k_lhs_padded);
-
-        // make sure to round up if we're supposed to (since all these numbers are < 1, this means rounding up
-        // the last digit of PreciseNumber's 12 decimals)
-        let last_digit =
-            PreciseNumber::new(1)?.checked_div(&(PreciseNumber::new(1_0000_0000_0000)?))?;
-        sqrt_e2_plus_4_k_lhs = match should_round_sqrt_up && is_not_perfect_square {
-            true => sqrt_e2_plus_4_k_lhs_unrounded.checked_add(&last_digit)?,
-            false => sqrt_e2_plus_4_k_lhs_unrounded,
-        };
-    } else {
-        let e2_plus_4_k_lhs_u128 =
-            match e2_plus_4_k_lhs.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
-                true => e2_plus_4_k_lhs.to_imprecise()?,
-                // to_imprecise panics instead of returning None so need to handle explicitly here
-                // TODO: should do this everywhere else we call to_imprecise also, probably put into a DFSPreciseNumber wrapper
-                false => return None,
-            };
-        let sqrt_e2_plus_4_k_lhs_u128 = sqrt_babylonian(e2_plus_4_k_lhs_u128)?;
-        let sqrt_e2_plus_4_k_lhs_unrounded = PreciseNumber::new(sqrt_e2_plus_4_k_lhs_u128)?;
-
-        let is_not_perfect_square = sqrt_e2_plus_4_k_lhs_unrounded
-            .checked_mul(&sqrt_e2_plus_4_k_lhs_unrounded)?
-            .less_than(&e2_plus_4_k_lhs);
-
-        // make sure to add 1 if we're supposed to round up (and it wasn't a perfect square)
-        sqrt_e2_plus_4_k_lhs = match should_round_sqrt_up && is_not_perfect_square {
-            true => sqrt_e2_plus_4_k_lhs_unrounded.checked_add(&(PreciseNumber::new(1)?))?,
-            false => sqrt_e2_plus_4_k_lhs_unrounded,
-        };
-    }
+    // note we have to use u64 sqrt below (~10K compute) since PreciseNumber::sqrt (~100K compute)
+    // and u128 sqrt (~50K compute)are both too expensive
+    // TODO: need to move the rounding up/down stuff into sqrt_u128 too
+    let sqrt_e2_plus_4_k_lhs = e2_plus_4_k_lhs.sqrt_u64()?;
 
     // numerator is sqrt(e^2 + 4*k*lhs) - e
     let e_value = e_value_numerator.checked_div(e_value_denominator)?;

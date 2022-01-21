@@ -94,7 +94,11 @@ fn solve_quadratic_positive_root(
 
     // numerator is sqrt(e^2 + 4*k*lhs) - e
     let e_value = e_value_numerator.checked_div(e_value_denominator)?;
-    let numerator = sqrt_e2_plus_4_k_lhs.checked_sub(&e_value)?;
+    // due to sqrt rounding, sometimes this None's if we rounded down the sqrt, so treat that as 0
+    let numerator = match sqrt_e2_plus_4_k_lhs.checked_sub(&e_value) {
+        Some(val) => val,
+        None => PreciseNumber::new(0)?,
+    };
 
     // finally we return (sqrt(e^2-4kc) - e)/2k,
     // AKA numerator * k_denominator / k_numerator / 2 (do all the division last)
@@ -183,18 +187,10 @@ impl LinearPriceCurve {
         let maximum_b_value =
             b_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?))?;
         let maximum_a_locked = self.amt_a_locked_at_b_value_quadratic(&maximum_b_value)?;
-        let maximum_a_remaining = maximum_a_locked.checked_sub(&a_start)?;
+        let maximum_a_remaining = maximum_a_locked.checked_sub(&a_start)?.to_imprecise()?;
 
-        // to_imprecise panics instead of returning None so need to handle explicitly here
-        // TODO: this could be simplified with DFSPreciseNumber
-        let maximum_a_remaining_u128 =
-            match maximum_a_remaining.less_than_or_equal(&(PreciseNumber::new(u128::MAX)?)) {
-                true => maximum_a_remaining.to_imprecise(),
-                false => None,
-            }?;
-
-        if maximum_a_remaining_u128 <= source_amount {
-            return Some((maximum_a_remaining_u128, swap_destination_amount));
+        if maximum_a_remaining <= source_amount {
+            return Some((maximum_a_remaining, swap_destination_amount));
         } else {
             return None;
         }
@@ -444,12 +440,14 @@ impl CurveCalculator for LinearPriceCurve {
         &self,
         swap_token_a_amount: u128,
         swap_token_b_amount: u128,
-    ) -> Option<PreciseNumber> {
+    ) -> Option<spl_math::precise_number::PreciseNumber> {
         let b_value_of_a = self.b_value_with_amt_a_locked_quadratic(
             &(PreciseNumber::new(swap_token_a_amount)?),
             false,
         )?;
-        return Some(b_value_of_a.checked_add(&(PreciseNumber::new(swap_token_b_amount)?))?);
+        b_value_of_a
+            .checked_add(&(PreciseNumber::new(swap_token_b_amount)?))?
+            .to_spl_precise_number()
     }
 }
 

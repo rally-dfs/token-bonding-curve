@@ -2,8 +2,9 @@
 //! but instead of having 12 decimals of Precision with `ONE`, we use 30 decimals
 //! (so roughly 100 bits of U256 is for decimals and the remaining 156 bits is for the value)
 //! The maximum amount supported is lower than spl-math, but should be fine for our purposes
-//! since we're only ever operating on wrapped u64 type numbers (TODO: test this)
-//! Also fixes some quirks from PreciseNumber around to_imprecise
+//! since we're only ever operating on wrapped u64 type numbers
+//! Also fixes some quirks from PreciseNumber around to_imprecise and removes pow/root
+//! since we don't need those (could add them back in if we did more testing around precision)
 
 use spl_math::uint::U256;
 
@@ -59,10 +60,16 @@ impl PreciseNumber {
 
     /// Convert a precise number back to u128
     pub fn to_imprecise(&self) -> Option<u128> {
-        self.value
+        let corrected = self
+            .value
             .checked_add(Self::rounding_correction())?
-            .checked_div(one())
-            .map(|v| v.as_u128())
+            .checked_div(one());
+
+        // don't panic if self > u128 max (this differs from spl_math::PreciseNumber)
+        match corrected.le(&(Some(InnerUint::from(u128::MAX)))) {
+            true => corrected.map(|v| v.as_u128()),
+            false => None,
+        }
     }
 
     /// Checks that two PreciseNumbers are equal within some tolerance
@@ -173,8 +180,17 @@ impl PreciseNumber {
         }
     }
 
+    pub fn to_spl_precise_number(&self) -> Option<spl_math::precise_number::PreciseNumber> {
+        let value_u128 = self.to_imprecise()?;
+        let spl_number = spl_math::precise_number::PreciseNumber::new(value_u128)?;
 
+        // add on the decimals manually
+        let decimals_u128 = (self.value % ONE).as_u128();
+        let decimals_scaled = spl_math::precise_number::PreciseNumber::new(decimals_u128)?;
+        let one = spl_math::precise_number::PreciseNumber::new(ONE)?;
+        let decimals = decimals_scaled.checked_div(&one)?;
 
+        spl_number.checked_add(&decimals)
     }
 
     /// Babylonian sqrt method
@@ -284,6 +300,20 @@ impl PreciseNumber {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn test_to_imprecise() {
+        let number = PreciseNumber::new(0).unwrap();
+        assert_eq!(number.floor().unwrap().to_imprecise().unwrap(), 0);
+
+        let number = PreciseNumber::new(u128::MAX).unwrap();
+        assert_eq!(number.to_imprecise().unwrap(), u128::MAX);
+
+        // should just return None instead of panic if overflow
+        let number = PreciseNumber::new(u128::MAX).unwrap();
+        let number = number.checked_add(&number).unwrap();
+        assert!(number.to_imprecise().is_none());
+    }
 
     #[test]
     fn test_sqrt_u64() {

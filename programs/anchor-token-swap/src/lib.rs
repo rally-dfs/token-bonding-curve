@@ -6,6 +6,7 @@ mod instructions;
 
 pub mod constraints;
 pub mod curve;
+pub mod dfs_precise_number;
 pub mod error;
 pub mod processor;
 pub mod state;

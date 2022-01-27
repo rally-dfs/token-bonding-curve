@@ -196,7 +196,7 @@ impl PreciseNumber {
     /// Babylonian sqrt method
     /// Note this will underestimate if not exact - that's taken into account in
     /// sqrt_u64 (TODO: still need to implement this)
-    fn sqrt_babylonian(x: u64) -> Option<u64> {
+    fn sqrt_babylonian(x: u64, should_round_up: bool) -> Option<u64> {
         let mut z = match x.checked_add(1) {
             Some(val) => val.checked_div(2)?,
             None => x.checked_div(2)?, // handle u64 max
@@ -206,7 +206,16 @@ impl PreciseNumber {
             y = z;
             z = x.checked_div(z)?.checked_add(z)?.checked_div(2)?;
         }
-        Some(y)
+
+        // make sure to add 1 if we're supposed to round up (and it wasn't a perfect square)
+        let is_not_perfect_square = y.checked_mul(y)?.lt(&x);
+
+        let rounded_sqrt = match should_round_up && is_not_perfect_square {
+            true => y.checked_add(1),
+            false => Some(y),
+        };
+
+        rounded_sqrt
     }
 
     /// Takes sqrt to a precision of u64
@@ -216,7 +225,7 @@ impl PreciseNumber {
     /// be fine
     /// Especially because we're using 18 decimals for ONE instead of 12, using the ~50K u128 version risks
     /// overflowing compute
-    pub fn sqrt_u64(&self) -> Option<Self> {
+    pub fn sqrt_u64(&self, should_round_up: bool) -> Option<Self> {
         let value_bits = self.value.bits();
         let max_bits = 64;
 
@@ -240,7 +249,7 @@ impl PreciseNumber {
             let padded_u128 = padded_value.as_u64();
 
             // `sqrt_padded_u128 = real_sqrt * sqrt(2^pad_bits) * sqrt(ONE)`
-            let sqrt_padded_u128 = Self::sqrt_babylonian(padded_u128)?;
+            let sqrt_padded_u128 = Self::sqrt_babylonian(padded_u128, should_round_up)?;
 
             // since we're converting directly from u128 to PreciseNumber, we're implicitly dividing by ONE
             // so `sqrt_padded = real_sqrt * sqrt(2^pad_bits) * sqrt(ONE) / ONE`
@@ -251,9 +260,22 @@ impl PreciseNumber {
 
             // so real_sqrt = sqrt_padded * sqrt(ONE) / sqrt(2^pad_bits)
             // (do this after converting to PreciseNumber so we don't lose precision)
-            real_sqrt = sqrt_padded
-                .checked_mul(&(Self::new(SQRT_ONE)?))?
-                .checked_div(&correction_factor)
+            let unrounded_numerator = sqrt_padded.checked_mul(&(Self::new(SQRT_ONE)?))?;
+            let unrounded_sqrt = unrounded_numerator.checked_div(&correction_factor)?;
+
+            // finally, round up if it wasn't a perfect division and we should round up
+            real_sqrt = match should_round_up
+                && unrounded_sqrt
+                    .checked_mul(&correction_factor)?
+                    .less_than(&unrounded_numerator)
+            {
+                true => unrounded_sqrt.checked_add(
+                    &(Self {
+                        value: InnerUint::from(1),
+                    }),
+                ),
+                false => Some(unrounded_sqrt),
+            }
         } else {
             // number is too large, we need to remove precision off the end to not overflow compute
             // this is very similar to the above but we unpad and multiply at the end instead of padding
@@ -269,14 +291,21 @@ impl PreciseNumber {
 
             // divide by 2^pad_bits
             // so `padded_value = real_value / 2^pad_bits`
-            let padded_value = self.value >> pad_bits;
+            let unrounded_padded_value = self.value >> pad_bits;
+
+            // round up if it wasn't a perfect division and we should round up
+            let padded_value =
+                match should_round_up && (unrounded_padded_value << pad_bits).lt(&self.value) {
+                    true => unrounded_padded_value.checked_add(InnerUint::from(1))?,
+                    false => unrounded_padded_value,
+                };
 
             // we're implicitly multiplying by ONE here (since we converted self.value to u128 directly)
             // so `padded_u128 = real_value * 2^pad_bits / ONE`
             let padded_u128 = padded_value.as_u64();
 
             // `sqrt_padded_u128 = real_sqrt * sqrt(2^pad_bits) / sqrt(ONE)`
-            let sqrt_padded_u128 = Self::sqrt_babylonian(padded_u128)?;
+            let sqrt_padded_u128 = Self::sqrt_babylonian(padded_u128, should_round_up)?;
 
             // since we're converting directly from u128 to PreciseNumber, we're implicitly dividing by ONE
             // so `sqrt_padded = real_sqrt / sqrt(2^pad_bits) * sqrt(ONE) / ONE`
@@ -330,12 +359,12 @@ mod tests {
             .unwrap();
         assert!(
             number
-                .sqrt_u64()
+                .sqrt_u64(false)
                 .unwrap()
                 // precise to first 9 decimals
                 .almost_eq(&expected_sqrt, InnerUint::from(ONE / 1_000_000_000)),
             "sqrt {:?} not equal to expected {:?}",
-            number.sqrt_u64().unwrap(),
+            number.sqrt_u64(false).unwrap(),
             expected_sqrt,
         );
 
@@ -352,12 +381,12 @@ mod tests {
             .unwrap();
         assert!(
             number
-                .sqrt_u64()
+                .sqrt_u64(false)
                 .unwrap()
                 // precise to first 9 decimals
                 .almost_eq(&expected_sqrt, InnerUint::from(ONE / 1_000_000_000)),
             "sqrt {:?} not equal to expected {:?}",
-            number.sqrt_u64().unwrap(),
+            number.sqrt_u64(false).unwrap(),
             expected_sqrt,
         );
 
@@ -374,12 +403,12 @@ mod tests {
             .unwrap();
         assert!(
             number
-                .sqrt_u64()
+                .sqrt_u64(false)
                 .unwrap()
                 // precise to first 9 decimals
                 .almost_eq(&expected_sqrt, InnerUint::from(ONE / 1_000_000_000)),
             "sqrt {:?} not equal to expected {:?}",
-            number.sqrt_u64().unwrap(),
+            number.sqrt_u64(false).unwrap(),
             expected_sqrt,
         );
 
@@ -389,12 +418,12 @@ mod tests {
         let expected_sqrt = PreciseNumber::new(1).unwrap();
         assert!(
             number
-                .sqrt_u64()
+                .sqrt_u64(false)
                 .unwrap()
                 // precise to first 12 decimals
                 .almost_eq(&expected_sqrt, InnerUint::from(ONE / 1_000_000_000_000)),
             "sqrt {:?} not equal to expected {:?}",
-            number.sqrt_u64().unwrap(),
+            number.sqrt_u64(false).unwrap(),
             expected_sqrt,
         );
 
@@ -412,12 +441,12 @@ mod tests {
             .unwrap();
         assert!(
             number
-                .sqrt_u64()
+                .sqrt_u64(false)
                 .unwrap()
                 // we lose more precision on these big ones so just first 9 digits
                 .almost_eq(&expected_sqrt, InnerUint::from(ONE * 10)),
             "sqrt {:?} not equal to expected {:?}",
-            number.sqrt_u64().unwrap(),
+            number.sqrt_u64(false).unwrap(),
             expected_sqrt,
         );
 
@@ -431,7 +460,7 @@ mod tests {
         let expected_sqrt = PreciseNumber::new(11111111060555555440).unwrap();
         assert!(
             number
-                .sqrt_u64()
+                .sqrt_u64(false)
                 .unwrap()
                 // we lose more precision on these big ones so just first 9 (of the 20) digits is fine
                 .almost_eq(
@@ -441,8 +470,156 @@ mod tests {
                         .unwrap(),
                 ),
             "sqrt {:?} not equal to expected {:?}",
-            number.sqrt_u64().unwrap(),
+            number.sqrt_u64(false).unwrap(),
             expected_sqrt,
+        );
+
+        // small perfect square (4e-18), should_round_up=false
+        let number = PreciseNumber::new(4)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .unwrap();
+        // 2e-9, shouldn't do any rounding
+        let expected_sqrt = PreciseNumber::new(2)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(9)).unwrap()))
+            .unwrap();
+        assert!(
+            number.sqrt_u64(false).unwrap().eq(&expected_sqrt),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(false).unwrap(),
+            expected_sqrt,
+        );
+
+        // small perfect square (4e-18), should_round_up=true
+        let number = PreciseNumber::new(4)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .unwrap();
+        // 2e-9
+        let expected_sqrt = PreciseNumber::new(2)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(9)).unwrap()))
+            .unwrap();
+        assert!(
+            number.sqrt_u64(true).unwrap().eq(&expected_sqrt),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(true).unwrap(),
+            expected_sqrt,
+        );
+
+        // small imperfect square (3e-18), should_round_up=false
+        let number = PreciseNumber::new(3)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .unwrap();
+        // 1.7320508075688e-9 (only room for first 10 digits), should round down to 1.732050807e-9
+        let expected_sqrt = PreciseNumber::new(1732050807)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .unwrap();
+        assert!(
+            number.sqrt_u64(false).unwrap().eq(&expected_sqrt),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(false).unwrap(),
+            expected_sqrt,
+        );
+
+        // small imperfect square (3e-18), should_round_up=true
+        let number = PreciseNumber::new(3)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .unwrap();
+        // 1.7320508075688e-9 (only room for first 10 digits), should round down to 1.732050808e-9
+        let expected_sqrt = PreciseNumber::new(1732050808)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .unwrap();
+        assert!(
+            number.sqrt_u64(true).unwrap().eq(&expected_sqrt),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(true).unwrap(),
+            expected_sqrt,
+        );
+
+        // perfect square, should_round_up=false
+        let number = PreciseNumber::new(400).unwrap();
+        let expected_sqrt = PreciseNumber::new(20).unwrap();
+        assert!(
+            number.sqrt_u64(false).unwrap().eq(&expected_sqrt),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(false).unwrap(),
+            expected_sqrt,
+        );
+
+        // perfect square, should_round_up=true
+        let number = PreciseNumber::new(400).unwrap();
+        let expected_sqrt = PreciseNumber::new(20).unwrap();
+        assert!(
+            number.sqrt_u64(true).unwrap().eq(&expected_sqrt),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(true).unwrap(),
+            expected_sqrt,
+        );
+
+        // large imperfect square, should_round_up=false
+        let number = PreciseNumber::new(300).unwrap();
+        // 17.32050807568
+        let expected_sqrt = PreciseNumber::new(1732050807568)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(11)).unwrap()))
+            .unwrap();
+        assert!(
+            number
+                .sqrt_u64(false)
+                .unwrap()
+                // just check first 9 digits (7 decimals) of precision
+                .almost_eq(&expected_sqrt, InnerUint::from(ONE / 10_000_000)),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(false).unwrap(),
+            expected_sqrt,
+        );
+        // make sure we rounded down though
+        assert!(
+            number.sqrt_u64(false).unwrap().less_than(&expected_sqrt),
+            "sqrt {:?} did not round down from expected {:?}",
+            number.sqrt_u64(false).unwrap(),
+            expected_sqrt,
+        );
+        msg!(
+            "sqrt {:?}  expected {:?}",
+            number.sqrt_u64(false).unwrap(),
+            expected_sqrt
+        );
+
+        // large imperfect square, should_round_up=true
+        let number = PreciseNumber::new(300).unwrap();
+        // 17.32050807568
+        let expected_sqrt = PreciseNumber::new(1732050807568)
+            .unwrap()
+            .checked_div(&(PreciseNumber::new(10u128.pow(11)).unwrap()))
+            .unwrap();
+        assert!(
+            number
+                .sqrt_u64(true)
+                .unwrap()
+                // just check first 9 digits (7 decimals) of precision
+                .almost_eq(&expected_sqrt, InnerUint::from(ONE / 10_000_000)),
+            "sqrt {:?} not equal to expected {:?}",
+            number.sqrt_u64(true).unwrap(),
+            expected_sqrt,
+        );
+        // make sure we rounded up though
+        assert!(
+            number.sqrt_u64(true).unwrap().greater_than(&expected_sqrt),
+            "sqrt {:?} did not round down from expected {:?}",
+            number.sqrt_u64(true).unwrap(),
+            expected_sqrt,
+        );
+        msg!(
+            "sqrt {:?}  expected {:?}",
+            number.sqrt_u64(true).unwrap(),
+            expected_sqrt
         );
     }
 

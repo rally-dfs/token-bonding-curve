@@ -88,9 +88,9 @@ fn solve_quadratic_positive_root(
         .checked_add(&four_k_lhs)?;
 
     // note we have to use u64 sqrt below (~10K compute) since PreciseNumber::sqrt (~100K compute)
-    // and u128 sqrt (~50K compute)are both too expensive
+    // and u128 sqrt (~50K compute) are both too expensive
     // TODO: need to move the rounding up/down stuff into sqrt_u128 too
-    let sqrt_e2_plus_4_k_lhs = e2_plus_4_k_lhs.sqrt_u64()?;
+    let sqrt_e2_plus_4_k_lhs = e2_plus_4_k_lhs.sqrt_u64(should_round_sqrt_up)?;
 
     // numerator is sqrt(e^2 + 4*k*lhs) - e
     let e_value = e_value_numerator.checked_div(e_value_denominator)?;

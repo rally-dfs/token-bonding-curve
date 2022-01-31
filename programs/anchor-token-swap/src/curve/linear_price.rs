@@ -1585,27 +1585,288 @@ mod tests {
         assert!(!curve.validate().is_ok());
     }
 
+    #[test]
+    fn test_taki() {
+        let curve = LinearPriceCurve {
+            slope_numerator: 37,
+            slope_denominator: 1400000000000000000,
+            initial_token_a_price_numerator: 7,
+            initial_token_a_price_denominator: 2,
+        };
+
+        let result = curve.swap_without_fees(1, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        // should be .29, but sqrt rounds down to 0
+        assert!(result.is_none());
+
+        let result = curve.swap_without_fees(1000, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        // should be 285.71, but sqrt rounds down to 0
+        assert!(result.is_none());
+
+        let result =
+            curve.swap_without_fees(1000000, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        // should be 285714, but sqrt rounds down to 0
+        assert!(result.is_none());
+
+        let result =
+            curve.swap_without_fees(10000000, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        // should be 2.85714286×10^6, but sqrt rounds down to 0
+        assert!(result.is_none());
+
+        let result =
+            curve.swap_without_fees(100000000, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        // should be 2.857142857×10^7, but sqrt rounds down to 0
+        assert!(result.is_none());
+
+        // everything after here has enough sqrt precision so won't round down to 0
+
+        // .133 RLY
+        let result =
+            curve.swap_without_fees(133000000, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 133000000,
+
+                // 3.799999999×10^7 - rounded down a little due to sqrt rounding
+                destination_amount_swapped: 37837837
+            }
+        );
+
+        // $1 RLY
+        let result =
+            curve.swap_without_fees(1000000000, 0, 1_285_000_000_000_000, TradeDirection::AtoB);
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1000000000,
+
+                // 2.8571428541×10^8 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 264864864
+            }
+        );
+
+        // 1K RLY
+        let result = curve.swap_without_fees(
+            1000000000000,
+            0,
+            1_285_000_000_000_000,
+            TradeDirection::AtoB,
+        );
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1000000000000,
+
+                // 2.8571397751004×10^11 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 285713513513
+            }
+        );
+
+        // 1mm RLY
+        let result = curve.swap_without_fees(
+            1000000000000000,
+            0,
+            1_285_000_000_000_000,
+            TradeDirection::AtoB,
+        );
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1000000000000000,
+
+                // 2.8540674394376759×10^14 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 285406724324324
+            }
+        );
+
+        // 1B RLY
+        let result = curve.swap_without_fees(
+            1000000000000000000,
+            0,
+            1_285_000_000_000_000_000_000,
+            TradeDirection::AtoB,
+        );
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1000000000000000000,
+
+                // 1.7287728709127755139×10^17 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 172877287081081081
+            }
+        );
+
+        // testing b -> a from 1B RLY back down to 0
+
+        // 1000000000000000000 <- A value at B = 172877287081081081
+        // 482142857142857142.86 <- A value at B = 100000000000000000
+        let result = curve.swap_without_fees(
+            72877287081081081, // amount B in = diff between B values
+            0, // this doesn't matter (amt of token b left but we're going the other direction)
+            1000000000000000000,
+            TradeDirection::BtoA,
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 72877287081081081,
+
+                // 517857142857142858 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 517857142392277990
+            }
+        );
+
+        // now (with actual A numbers above), swap balance is 482142857607722010
+        // 482142857607722010 <- A value at B = 100000000000000000
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 350132142857142.85 <- A value at B = 100000000000000
+        let result = curve.swap_without_fees(
+            99900000000000000, // amount B in = diff between B values
+            0, // this doesn't matter (amt of token b left but we're going the other direction)
+            482142857607722010,
+            TradeDirection::BtoA,
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 99900000000000000,
+
+                // 481792725464864868 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 481792725048334364
+            }
+        );
+
+        // now (with actual A numbers above), swap balance is 350132559387646
+        // 350132559387646 <- A value at B = 100000000000000
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 28571425489.38 <- A value at B = 100000000000
+        let result = curve.swap_without_fees(
+            99900000000000, // amount B in = diff between B values
+            0, // this doesn't matter (amt of token b left but we're going the other direction)
+            350132559387646,
+            TradeDirection::BtoA,
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 99900000000000,
+
+                // 350103987962157 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 349782048444306
+            }
+        );
+
+        // now (with actual A numbers above), swap balance is 350510943340
+        // 350510943340 <- A value at B = 100000000000
+        //  (using the rounded A value from above to make sure the rounding doesn't cause any compounding issues)
+        // 285714285.41 <- A value at B = 1000000000
+        // (note stepping down by 100x instead of 1000x like above so we don't go below minimum)
+        let result = curve.swap_without_fees(
+            99000000000, // amount B in = diff between B values
+            0, // this doesn't matter (amt of token b left but we're going the other direction)
+            350510943340,
+            TradeDirection::BtoA,
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 99000000000,
+
+                // 350225229055 rounded down a little due to sqrt rounding
+                destination_amount_swapped: 346462294672
+            }
+        );
+
+        // now (with actual A numbers above), swap balance is 4048648668
+        // 4048648668 <- A value at B = 1000000000
+        // 0 <- A value at B = 0
+        // note swapping below minimum amount (~133000000) will leave some token A in the pool from sqrt rounding down
+        let result = curve.swap_without_fees(
+            1000000000, // amount B in = diff between B values
+            0, // this doesn't matter (amt of token b left but we're going the other direction)
+            4048648668,
+            TradeDirection::BtoA,
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1000000000,
+                destination_amount_swapped: 3443243262
+            }
+        );
+
+        // can get it all out by putting in a lot more token B so it doesn't round down
+        let result = curve.swap_without_fees(
+            100000000000, // amount B in = diff between B values
+            0, // this doesn't matter (amt of token b left but we're going the other direction)
+            4048648668,
+            TradeDirection::BtoA,
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            SwapWithoutFeesResult {
+                source_amount_swapped: 1172972973, // only takes the token A needed to drain all the token B
+                destination_amount_swapped: 4048648668
+            }
+        );
+    }
+
     /// Tests swapping the minimum amount of tokens at a time (e.g. 1) in a loop from 0 to max and
     /// then back to 0, making sure there's no rounding arbitrage opportunities. Useful for sanity checking
     /// specific swap steps for a specific curve (e.g. one about to be created on mainnet)
     #[test]
     fn minimum_token_exchange_rounding() {
+        // can change `curve` and `starting_supply_b` to test different initialized curves
         let curve = LinearPriceCurve {
-            slope_numerator: 1,
-            slope_denominator: 1_000_000_000_000,
-            initial_token_a_price_numerator: 0,
-            initial_token_a_price_denominator: 1,
+            slope_numerator: 37,
+            slope_denominator: 1400_000_000_000_000_000,
+            initial_token_a_price_numerator: 7,
+            initial_token_a_price_denominator: 2,
         };
-        let starting_supply_b: u128 = 10_000_000;
+        let starting_supply_b: u128 = 1_000_000_000_000_000_000;
+
         // swap at least `step` tokens at a time, can tweak this if it takes a lot of token a to get out 1 token b
-        // (would be even better to use something analogous to the next_b_value/current_b_value that we use below)
-        let step = 1;
+        let step = 100_000_000_000_000;
+
+        // log every n swaps, can decrease this for more verbosity, e.g. 1000 or 10000 usually makes sense
+        let log_verbosity = 1000000;
+
+        // actual test code starts here:
+
+        let mut log_iter = 0;
 
         let mut swap_supply_a = 0;
         let mut swap_supply_b: u128 = starting_supply_b.into();
 
         while swap_supply_b > 0 {
-            let mut amount_a = step;
+            // usually (for small slope curves), it takes a lot of b to get back 1 a,
+            // so just precalculate a reasonable starting point instead of starting from 1
+            let current_a_value = curve
+                .amt_a_locked_at_b_value_quadratic(
+                    &(PreciseNumber::new(starting_supply_b - swap_supply_b).unwrap()),
+                )
+                .unwrap()
+                .to_imprecise()
+                .unwrap();
+
+            let next_a_value = curve
+                .amt_a_locked_at_b_value_quadratic(
+                    &(PreciseNumber::new(starting_supply_b - swap_supply_b + 1).unwrap()),
+                )
+                .unwrap()
+                .to_imprecise()
+                .unwrap();
+
+            let mut amount_a = match (next_a_value - current_a_value).checked_sub(10 * step) {
+                Some(val) => val,
+                None => next_a_value - current_a_value,
+            };
             loop {
                 let result = curve.swap_without_fees(
                     amount_a,
@@ -1623,13 +1884,16 @@ mod tests {
                     swap_supply_b -= destination_amount_swapped;
 
                     // uncomment to see every token step:
-                    // msg!(
-                    //     "Swapped {:?} token a (bal {:?}) for {:?} token b (bal {:?})",
-                    //     source_amount_swapped,
-                    //     swap_supply_a,
-                    //     destination_amount_swapped,
-                    //     swap_supply_b,
-                    // );
+                    log_iter += 1;
+                    if log_iter % log_verbosity == 0 {
+                        msg!(
+                            "Swapped {:?} token a (bal {:?}) for {:?} token b (bal {:?})",
+                            source_amount_swapped,
+                            swap_supply_a,
+                            destination_amount_swapped,
+                            swap_supply_b,
+                        );
+                    }
                     break;
                 } else {
                     // if result was none, there wasn't enough a token to get out any b, so try a bit more
@@ -1655,16 +1919,25 @@ mod tests {
                 .to_imprecise()
                 .unwrap();
 
+            // need to use step here too or else we can underflow easily
+            let next_a_value = match swap_supply_a.checked_sub(step) {
+                Some(val) => val,
+                None => 0,
+            };
+
             let next_b_value = curve
                 .b_value_with_amt_a_locked_quadratic(
-                    &(PreciseNumber::new(swap_supply_a - 1).unwrap()),
+                    &(PreciseNumber::new(next_a_value).unwrap()),
                     true,
                 )
                 .unwrap()
                 .to_imprecise()
                 .unwrap();
 
-            let mut amount_b = current_b_value - next_b_value - 10;
+            let mut amount_b = match (current_b_value - next_b_value).checked_sub(10 * step) {
+                Some(val) => val,
+                None => current_b_value - next_b_value,
+            };
             loop {
                 let result = curve.swap_without_fees(
                     amount_b,
@@ -1682,13 +1955,16 @@ mod tests {
                     swap_supply_a -= destination_amount_swapped;
 
                     // uncomment to see every token step:
-                    // msg!(
-                    //     "Swapped {:?} token b (bal {:?}) for {:?} token a (bal {:?})",
-                    //     source_amount_swapped,
-                    //     swap_supply_b,
-                    //     destination_amount_swapped,
-                    //     swap_supply_a,
-                    // );
+                    log_iter += 1;
+                    if log_iter % log_verbosity == 0 {
+                        msg!(
+                            "Swapped {:?} token b (bal {:?}) for {:?} token a (bal {:?})",
+                            source_amount_swapped,
+                            swap_supply_b,
+                            destination_amount_swapped,
+                            swap_supply_a,
+                        );
+                    }
                     break;
                 } else {
                     // if result was none, there wasn't enough a token to get out any b, so try a bit more
@@ -1712,19 +1988,18 @@ mod tests {
         fn curve_value_does_not_decrease_from_swap_a_to_b(
             // how much a user is swapping in
             source_token_amount in 1..u64::MAX,
-            // how much a is already in swap (determines spot price), for a low slope curve we might overflow
-            // if we go all the way to u64::MAX
-            swap_source_amount in 1..u32::MAX,
+            // how much a is already in swap (determines spot price)
+            swap_source_amount in 1..u64::MAX,
         ) {
             // Kind of complicated to check overflow/underflow if we try to also make these parameterized in proptest
             // (and we'd basically be using the functions we're trying to test to do those prop_assume checks, so
             // kind of pointless), probably just makes sense to run this test on a specific curve to sanity check it
             // (and tweak the source_token_amount/swap_source_amount ranges to not overflow)
             let curve = LinearPriceCurve {
-                slope_numerator: 1,
-                slope_denominator: 1_000_000_000_000,
-                initial_token_a_price_numerator: 0,
-                initial_token_a_price_denominator: 1,
+                slope_numerator: 37,
+                slope_denominator: 1_400_000_000_000_000_000,
+                initial_token_a_price_numerator: 7,
+                initial_token_a_price_denominator: 2,
             };
 
             let (_source_amount_swapped, destination_amount_swapped) = curve
@@ -1755,9 +2030,8 @@ mod tests {
         fn curve_value_does_not_decrease_from_swap_b_to_a(
             // how much b user is swapping in
             source_token_amount in 1..u64::MAX,
-            // how much a is already in swap (determines spot price), for a low slope curve we might overflow
-            // if we go all the way to u64::MAX
-            swap_destination_amount in 1..u32::MAX,
+            // how much a is already in swap (determines spot price)
+            swap_destination_amount in 1..u64::MAX,
         ) {
             // Same as above - too complicated to parametrize all these in proptest
             let curve = LinearPriceCurve {

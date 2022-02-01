@@ -41,20 +41,6 @@ pub struct LinearPriceCurve {
     pub initial_token_a_price_denominator: u64,
 }
 
-/// Babylonian sqrt method
-/// this takes ~50K compute vs PreciseNumber::sqrt which takes ~100K
-/// Note this will underestimate if not exact - that's taken into account in
-/// solve_quadratic_positive_root
-fn sqrt_babylonian(x: u128) -> Option<u128> {
-    let mut z = x.checked_add(1)?.checked_div(2)?;
-    let mut y = x;
-    while z < y {
-        y = z;
-        z = x.checked_div(z)?.checked_add(z)?.checked_div(2)?;
-    }
-    Some(y)
-}
-
 /// Returns the positive root of x given lhs = k*x^2 + e*x, i.e.
 /// 0 = k*x^2 + e*x - lhs
 /// k, e, and lhs are assumed to always be non negative (so -lhs is always negative)
@@ -88,7 +74,6 @@ fn solve_quadratic_positive_root(
 
     // note we have to use u64 sqrt below (~10K compute) since PreciseNumber::sqrt (~100K compute)
     // and u128 sqrt (~50K compute) are both too expensive
-    // TODO: need to move the rounding up/down stuff into sqrt_u128 too
     let sqrt_e2_plus_4_k_lhs = e2_plus_4_k_lhs.sqrt_u64(should_round_sqrt_up)?;
 
     // numerator is sqrt(e^2 + 4*k*lhs) - e
@@ -283,8 +268,6 @@ impl LinearPriceCurve {
             .floor()?
             .to_imprecise()?;
 
-
-
         Some((source_amount, destination_amount))
     }
 }
@@ -341,7 +324,7 @@ impl CurveCalculator for LinearPriceCurve {
 
     /// Get the amount of trading tokens for the given amount of pool tokens,
     /// provided the total trading tokens and supply of pool tokens.
-    /// TODO: this isn't needed if we disable deposit/withdraw, otherwise
+    /// this isn't needed since we disabled deposit/withdraw, otherwise
     /// we need it to determine how many pool tokens deposit_all_token_types mints out
     /// (given a max limit of A and B) or how many pool tokens
     /// withdraw_all_token_types burns (given a min limit of A and B)
@@ -366,7 +349,7 @@ impl CurveCalculator for LinearPriceCurve {
     }
 
     /// Get the amount of pool tokens for the given amount of token A and B
-    /// TODO: this isn't needed if we disable deposits, otherwise
+    /// this isn't needed since we disable deposits, otherwise
     /// it's used in deposit_single_token_type_exact_amount_in to determine
     /// how much pool token to mint (given a trading token amount and a minimum_pool_token_rmount)
     fn deposit_single_token_type(
@@ -382,8 +365,8 @@ impl CurveCalculator for LinearPriceCurve {
     }
 
     /// Get the amount of pool tokens for the withdrawn amount of token A or B.
-    /// TODO: this mostly isn't needed if we disable withdrawals, UNLESS we have
-    /// non-zero host fees/trade fees, in which case it's used in `swap` to determine
+    /// this mostly isn't needed since we disable withdrawals, UNLESS we have non-zero host fees/trade fees
+    /// (which are currently disabled on the instruction level), in which case it's used in `swap` to determine
     /// how much pool token to mint (to account for fees) into the various fee accounts
     fn withdraw_single_token_type_exact_out(
         &self,
@@ -410,26 +393,19 @@ impl CurveCalculator for LinearPriceCurve {
     }
 
     /// Validate the given supply on initialization.
-    /// We require at least some bonded token B for the curve to be useful (collateral token can be 0)
-    /// TODO: if we enable deposits, then this check isn't needed, the pool can start with 0 of both
+    /// We require at least some bonded token B for the curve to be useful (collateral token must be 0)
     fn validate_supply(&self, token_a_amount: u64, token_b_amount: u64) -> Result<(), SwapError> {
         if token_b_amount == 0 {
             return Err(SwapError::EmptySupply);
         }
 
-        // i think there's probably a way to allow initial collateral token if we adjust the
-        // initial token values to take that into account, but seems easier to disallow it. it's the same
-        // as starting with 0 collateral token and then doing a swap anyway
         if token_a_amount != 0 {
             return Err(SwapError::InvalidSupply);
         }
         Ok(())
     }
 
-    /// TODO: we can explore enabling deposits if we resolve all the above functions
-    /// that affect deposits
-    /// (can still be independent of withdrawals - the latter requires amending CurveCalculator
-    /// to add an allows_withdrawals function too)
+    /// Both deposits and withdrawals are intentionally disabled
     fn allows_deposits(&self) -> bool {
         false
     }
@@ -508,6 +484,7 @@ mod tests {
     use super::*;
     use crate::curve::calculator::test::check_curve_value_from_swap;
     use proptest::prelude::*;
+    use solana_program::msg;
 
     #[test]
     fn swap_a_to_b_basic() {
@@ -862,8 +839,6 @@ mod tests {
                 destination_amount_swapped: 26087635639488208246
             }
         );
-
-        // TODO: need to fix the below test values once DFSPN is finalized
 
         // testing b -> a on the same curve
         // 340282366920938463463374607431768211455 (u128 max) <- A value at B = 26087635639488208246

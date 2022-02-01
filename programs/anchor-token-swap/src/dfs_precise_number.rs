@@ -48,10 +48,6 @@ impl PreciseNumber {
         Self { value: zero() }
     }
 
-    fn one() -> Self {
-        Self { value: one() }
-    }
-
     /// Create a precise number from an imprecise u128, should always succeed
     pub fn new(value: u128) -> Option<Self> {
         let value = InnerUint::from(value).checked_mul(one())?;
@@ -194,8 +190,7 @@ impl PreciseNumber {
     }
 
     /// Babylonian sqrt method
-    /// Note this will underestimate if not exact - that's taken into account in
-    /// sqrt_u64 (TODO: still need to implement this)
+    /// Note this will round up to the nearest int depending on `should_round_up`
     fn sqrt_babylonian(x: u64, should_round_up: bool) -> Option<u64> {
         let mut z = match x.checked_add(1) {
             Some(val) => val.checked_div(2)?,
@@ -328,7 +323,7 @@ impl PreciseNumber {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use solana_program::msg;
 
     #[test]
     fn test_to_imprecise() {

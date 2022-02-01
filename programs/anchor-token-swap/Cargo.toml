@@ -18,19 +18,19 @@ fuzz = ["arbitrary", "roots"]
 [dependencies]
 arrayref = "0.3.6"
 enum_dispatch = "0.3.7"
-num-derive = "0.3"
-num-traits = "0.2"
-solana-program = "1.8.0"
-spl-math = { version = "0.1", features = ["no-entrypoint"] }
-spl-token = { version = "3.2", features = ["no-entrypoint"] }
-thiserror = "1.0"
-arbitrary = { version = "0.4", features = ["derive"], optional = true }
+num-derive = "0.3.3"
+num-traits = "0.2.14"
+solana-program = "1.9.5"
+spl-math = { version = "0.1.0", features = ["no-entrypoint"] }
+spl-token = { version = "3.3.0", features = ["no-entrypoint"] }
+thiserror = "1.0.30"
+arbitrary = { version = "1.0.3", features = ["derive"], optional = true }
 roots = { version = "0.0.7", optional = true }
-anchor-lang = "0.18.0"
+anchor-lang = "0.20.1"
 
 [dev-dependencies]
-solana-sdk = "1.8.0"
-proptest = "1.0"
+solana-sdk = "1.9.5"
+proptest = "1.0.0"
 sim = { path = "./sim" }
 roots = "0.0.7"
 

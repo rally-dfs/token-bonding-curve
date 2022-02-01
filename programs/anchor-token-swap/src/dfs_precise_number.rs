@@ -21,7 +21,7 @@ pub const SQRT_ONE: u128 = 1000_000000;
 
 /// Struct encapsulating a fixed-point number that allows for decimal calculations
 #[derive(Clone, Debug, PartialEq)]
-pub struct PreciseNumber {
+pub struct DFSPreciseNumber {
     /// Wrapper over the inner value, which is multiplied by ONE
     pub value: InnerUint,
 }
@@ -36,7 +36,7 @@ fn zero() -> InnerUint {
     InnerUint::from(0)
 }
 
-impl PreciseNumber {
+impl DFSPreciseNumber {
     /// Correction to apply to avoid truncation errors on division.  Since
     /// integer operations will always floor the result, we artifically bump it
     /// up by one half to get the expect result.
@@ -230,7 +230,7 @@ impl PreciseNumber {
             // make sure pad_bits is an even number since we'll correct by unpadding half the bits at the end
             let pad_bits = (max_bits - value_bits) / 2 * 2;
             // correction_factor is sqrt(2^pad_bits), used below
-            let correction_factor = PreciseNumber::new(2u128.pow((pad_bits as u32) / 2))?;
+            let correction_factor = DFSPreciseNumber::new(2u128.pow((pad_bits as u32) / 2))?;
 
             // solving for real_sqrt below, i.e. the sqrt(real_value)
             // (real_value here is the actual value the PreciseNumber represents, i.e. self.value / ONE)
@@ -279,7 +279,7 @@ impl PreciseNumber {
             // make sure pad_bits is an even number since we'll correct by unpadding half the bits at the end (make sure we round pad_bits up here since we want to cut off enough to fit into 64 bits)
             let pad_bits = (value_bits - max_bits + 1) / 2 * 2;
             // correction_factor is sqrt(2^pad_bits), used below
-            let correction_factor = PreciseNumber::new(2u128.pow((pad_bits as u32) / 2))?;
+            let correction_factor = DFSPreciseNumber::new(2u128.pow((pad_bits as u32) / 2))?;
 
             // solving for real_sqrt below, i.e. the sqrt(real_value)
             // (real_value here is the actual value the PreciseNumber represents, i.e. self.value / ONE)
@@ -327,14 +327,14 @@ mod tests {
 
     #[test]
     fn test_to_imprecise() {
-        let number = PreciseNumber::new(0).unwrap();
+        let number = DFSPreciseNumber::new(0).unwrap();
         assert_eq!(number.floor().unwrap().to_imprecise().unwrap(), 0);
 
-        let number = PreciseNumber::new(u128::MAX).unwrap();
+        let number = DFSPreciseNumber::new(u128::MAX).unwrap();
         assert_eq!(number.to_imprecise().unwrap(), u128::MAX);
 
         // should just return None instead of panic if overflow
-        let number = PreciseNumber::new(u128::MAX).unwrap();
+        let number = DFSPreciseNumber::new(u128::MAX).unwrap();
         let number = number.checked_add(&number).unwrap();
         assert!(number.to_imprecise().is_none());
     }
@@ -342,15 +342,15 @@ mod tests {
     #[test]
     fn test_sqrt_u64() {
         // number below 1 (with uneven number of bits) 1.23456789e-9
-        let number = PreciseNumber::new(123456789)
+        let number = DFSPreciseNumber::new(123456789)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(17)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(17)).unwrap()))
             .unwrap();
         assert_eq!(number.value.bits(), 31);
         // sqrt is 3.51364182864446216-5
-        let expected_sqrt = PreciseNumber::new(351364182864446216)
+        let expected_sqrt = DFSPreciseNumber::new(351364182864446216)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(22)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(22)).unwrap()))
             .unwrap();
         assert!(
             number
@@ -364,15 +364,15 @@ mod tests {
         );
 
         // number below 1 (with even number of bits) 1e-8
-        let number = PreciseNumber::new(1)
+        let number = DFSPreciseNumber::new(1)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(8)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(8)).unwrap()))
             .unwrap();
         assert_eq!(number.value.bits(), 34);
         // sqrt is 1-e4
-        let expected_sqrt = PreciseNumber::new(1)
+        let expected_sqrt = DFSPreciseNumber::new(1)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(4)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(4)).unwrap()))
             .unwrap();
         assert!(
             number
@@ -386,15 +386,15 @@ mod tests {
         );
 
         // exactly max_bits 18446744073709551615e-18 (this is 64 bits of 1, then divided by ONE)
-        let number = PreciseNumber::new(18446744073709551615)
+        let number = DFSPreciseNumber::new(18446744073709551615)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         assert_eq!(number.value.bits(), 64);
         // sqrt is 4.29496729599999999988
-        let expected_sqrt = PreciseNumber::new(4294967295999999999)
+        let expected_sqrt = DFSPreciseNumber::new(4294967295999999999)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         assert!(
             number
@@ -408,9 +408,9 @@ mod tests {
         );
 
         // 1 exactly
-        let number = PreciseNumber::new(1).unwrap();
+        let number = DFSPreciseNumber::new(1).unwrap();
         // sqrt is 1
-        let expected_sqrt = PreciseNumber::new(1).unwrap();
+        let expected_sqrt = DFSPreciseNumber::new(1).unwrap();
         assert!(
             number
                 .sqrt_u64(false)
@@ -423,14 +423,14 @@ mod tests {
         );
 
         // large number, even bits 1234567890123456789
-        let number = PreciseNumber::new(1234567890123456789).unwrap();
+        let number = DFSPreciseNumber::new(1234567890123456789).unwrap();
         assert_eq!(number.value.bits(), 120);
         // sqrt is 1111111106.111111099355555502655555
-        let decimals = PreciseNumber::new(111111099355555502655555)
+        let decimals = DFSPreciseNumber::new(111111099355555502655555)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(24)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(24)).unwrap()))
             .unwrap();
-        let expected_sqrt = PreciseNumber::new(1111111106)
+        let expected_sqrt = DFSPreciseNumber::new(1111111106)
             .unwrap()
             .checked_add(&decimals)
             .unwrap();
@@ -446,13 +446,13 @@ mod tests {
         );
 
         // super large number, odd bits (pretty close to max value of u128) 1.23456789e38
-        let number = PreciseNumber::new(123456789)
+        let number = DFSPreciseNumber::new(123456789)
             .unwrap()
-            .checked_mul(&(PreciseNumber::new(10u128.pow(30)).unwrap()))
+            .checked_mul(&(DFSPreciseNumber::new(10u128.pow(30)).unwrap()))
             .unwrap();
         assert_eq!(number.value.bits(), 187);
         // sqrt is 11111111060555555440.5
-        let expected_sqrt = PreciseNumber::new(11111111060555555440).unwrap();
+        let expected_sqrt = DFSPreciseNumber::new(11111111060555555440).unwrap();
         assert!(
             number
                 .sqrt_u64(false)
@@ -470,14 +470,14 @@ mod tests {
         );
 
         // small perfect square (4e-18), should_round_up=false
-        let number = PreciseNumber::new(4)
+        let number = DFSPreciseNumber::new(4)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         // 2e-9, shouldn't do any rounding
-        let expected_sqrt = PreciseNumber::new(2)
+        let expected_sqrt = DFSPreciseNumber::new(2)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(9)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(9)).unwrap()))
             .unwrap();
         assert!(
             number.sqrt_u64(false).unwrap().eq(&expected_sqrt),
@@ -487,14 +487,14 @@ mod tests {
         );
 
         // small perfect square (4e-18), should_round_up=true
-        let number = PreciseNumber::new(4)
+        let number = DFSPreciseNumber::new(4)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         // 2e-9
-        let expected_sqrt = PreciseNumber::new(2)
+        let expected_sqrt = DFSPreciseNumber::new(2)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(9)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(9)).unwrap()))
             .unwrap();
         assert!(
             number.sqrt_u64(true).unwrap().eq(&expected_sqrt),
@@ -504,14 +504,14 @@ mod tests {
         );
 
         // small imperfect square (3e-18), should_round_up=false
-        let number = PreciseNumber::new(3)
+        let number = DFSPreciseNumber::new(3)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         // 1.7320508075688e-9 (only room for first 10 digits), should round down to 1.732050807e-9
-        let expected_sqrt = PreciseNumber::new(1732050807)
+        let expected_sqrt = DFSPreciseNumber::new(1732050807)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         assert!(
             number.sqrt_u64(false).unwrap().eq(&expected_sqrt),
@@ -521,14 +521,14 @@ mod tests {
         );
 
         // small imperfect square (3e-18), should_round_up=true
-        let number = PreciseNumber::new(3)
+        let number = DFSPreciseNumber::new(3)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         // 1.7320508075688e-9 (only room for first 10 digits), should round down to 1.732050808e-9
-        let expected_sqrt = PreciseNumber::new(1732050808)
+        let expected_sqrt = DFSPreciseNumber::new(1732050808)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(18)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(18)).unwrap()))
             .unwrap();
         assert!(
             number.sqrt_u64(true).unwrap().eq(&expected_sqrt),
@@ -538,8 +538,8 @@ mod tests {
         );
 
         // perfect square, should_round_up=false
-        let number = PreciseNumber::new(400).unwrap();
-        let expected_sqrt = PreciseNumber::new(20).unwrap();
+        let number = DFSPreciseNumber::new(400).unwrap();
+        let expected_sqrt = DFSPreciseNumber::new(20).unwrap();
         assert!(
             number.sqrt_u64(false).unwrap().eq(&expected_sqrt),
             "sqrt {:?} not equal to expected {:?}",
@@ -548,8 +548,8 @@ mod tests {
         );
 
         // perfect square, should_round_up=true
-        let number = PreciseNumber::new(400).unwrap();
-        let expected_sqrt = PreciseNumber::new(20).unwrap();
+        let number = DFSPreciseNumber::new(400).unwrap();
+        let expected_sqrt = DFSPreciseNumber::new(20).unwrap();
         assert!(
             number.sqrt_u64(true).unwrap().eq(&expected_sqrt),
             "sqrt {:?} not equal to expected {:?}",
@@ -558,11 +558,11 @@ mod tests {
         );
 
         // large imperfect square, should_round_up=false
-        let number = PreciseNumber::new(300).unwrap();
+        let number = DFSPreciseNumber::new(300).unwrap();
         // 17.32050807568
-        let expected_sqrt = PreciseNumber::new(1732050807568)
+        let expected_sqrt = DFSPreciseNumber::new(1732050807568)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(11)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(11)).unwrap()))
             .unwrap();
         assert!(
             number
@@ -588,11 +588,11 @@ mod tests {
         );
 
         // large imperfect square, should_round_up=true
-        let number = PreciseNumber::new(300).unwrap();
+        let number = DFSPreciseNumber::new(300).unwrap();
         // 17.32050807568
-        let expected_sqrt = PreciseNumber::new(1732050807568)
+        let expected_sqrt = DFSPreciseNumber::new(1732050807568)
             .unwrap()
-            .checked_div(&(PreciseNumber::new(10u128.pow(11)).unwrap()))
+            .checked_div(&(DFSPreciseNumber::new(10u128.pow(11)).unwrap()))
             .unwrap();
         assert!(
             number
@@ -620,8 +620,8 @@ mod tests {
 
     #[test]
     fn test_floor() {
-        let whole_number = PreciseNumber::new(2).unwrap();
-        let mut decimal_number = PreciseNumber::new(2).unwrap();
+        let whole_number = DFSPreciseNumber::new(2).unwrap();
+        let mut decimal_number = DFSPreciseNumber::new(2).unwrap();
         decimal_number.value += InnerUint::from(1);
         let floor = decimal_number.floor().unwrap();
         let floor_again = floor.floor().unwrap();
@@ -631,8 +631,8 @@ mod tests {
 
     #[test]
     fn test_ceiling() {
-        let whole_number = PreciseNumber::new(2).unwrap();
-        let mut decimal_number = PreciseNumber::new(2).unwrap();
+        let whole_number = DFSPreciseNumber::new(2).unwrap();
+        let mut decimal_number = DFSPreciseNumber::new(2).unwrap();
         decimal_number.value -= InnerUint::from(1);
         let ceiling = decimal_number.ceiling().unwrap();
         let ceiling_again = ceiling.ceiling().unwrap();

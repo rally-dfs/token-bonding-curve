@@ -12,7 +12,7 @@ use {
             map_zero_to_none, CurveCalculator, DynPack, RoundDirection, SwapWithoutFeesResult,
             TradeDirection, TradingTokenResult,
         },
-        dfs_precise_number::PreciseNumber,
+        dfs_precise_number::DFSPreciseNumber,
         error::SwapError,
     },
     arrayref::{array_mut_ref, array_ref},
@@ -48,20 +48,20 @@ pub struct LinearPriceCurve {
 /// Since e is always positive and c is always negative, the quadratic will always have one positive
 /// and one negative root, just return the positive one
 fn solve_quadratic_positive_root(
-    k_numerator: &PreciseNumber,
-    k_denominator: &PreciseNumber,
-    e_value_numerator: &PreciseNumber,
-    e_value_denominator: &PreciseNumber,
-    lhs_value: &PreciseNumber,
+    k_numerator: &DFSPreciseNumber,
+    k_denominator: &DFSPreciseNumber,
+    e_value_numerator: &DFSPreciseNumber,
+    e_value_denominator: &DFSPreciseNumber,
+    lhs_value: &DFSPreciseNumber,
     should_round_sqrt_up: bool,
-) -> Option<PreciseNumber> {
+) -> Option<DFSPreciseNumber> {
     // solve positive root of 0 = k*x^2 + e*x + c, where c == -lhs_value
     // => x = (-e + sqrt(e^2 - 4kc)) / 2k
     // => x = (sqrt(e^2 + 4*k*lhs) - e) / 2k
 
     // k * 4 * lhs
     let four_k_lhs = k_numerator
-        .checked_mul(&(PreciseNumber::new(4)?))?
+        .checked_mul(&(DFSPreciseNumber::new(4)?))?
         .checked_mul(lhs_value)?
         .checked_div(k_denominator)?;
 
@@ -81,7 +81,7 @@ fn solve_quadratic_positive_root(
     // due to sqrt rounding, sometimes this None's if we rounded down the sqrt, so treat that as 0
     let numerator = match sqrt_e2_plus_4_k_lhs.checked_sub(&e_value) {
         Some(val) => val,
-        None => PreciseNumber::new(0)?,
+        None => DFSPreciseNumber::new(0)?,
     };
 
     // finally we return (sqrt(e^2-4kc) - e)/2k,
@@ -89,7 +89,7 @@ fn solve_quadratic_positive_root(
     numerator
         .checked_mul(k_denominator)?
         .checked_div(&k_numerator)?
-        .checked_div(&(PreciseNumber::new(2)?))
+        .checked_div(&(DFSPreciseNumber::new(2)?))
 }
 
 /// These functions use the integral of the linear price curve to determine liquidity of A at a
@@ -101,21 +101,26 @@ fn solve_quadratic_positive_root(
 /// The sqrt function drops down to u128 so we don't use all our compute but everything else uses PreciseNumber
 impl LinearPriceCurve {
     /// Returns the amount of A token locked at a given b_value (by plugging b_value into the integral function)
-    fn amt_a_locked_at_b_value_quadratic(&self, b_value: &PreciseNumber) -> Option<PreciseNumber> {
+    fn amt_a_locked_at_b_value_quadratic(
+        &self,
+        b_value: &DFSPreciseNumber,
+    ) -> Option<DFSPreciseNumber> {
         // The liquidity integral is `token_a_bonded = 0.5m*b^2 + a0*b + 0` (integration constant is 0 since we know
         // there's 0 token A bonded at b = 0)
 
         // 0.5 * m * b^2
-        let half_m_b_squared = PreciseNumber::new(self.slope_numerator.into())?
+        let half_m_b_squared = DFSPreciseNumber::new(self.slope_numerator.into())?
             .checked_mul(b_value)?
             .checked_mul(b_value)?
-            .checked_div(&(PreciseNumber::new(self.slope_denominator.into())?))?
-            .checked_div(&(PreciseNumber::new(2)?))?;
+            .checked_div(&(DFSPreciseNumber::new(self.slope_denominator.into())?))?
+            .checked_div(&(DFSPreciseNumber::new(2)?))?;
 
         // a0 * b (note a0 and b are always positive) - make sure to do division last
-        let a0_times_b = PreciseNumber::new(self.initial_token_a_price_numerator.into())?
+        let a0_times_b = DFSPreciseNumber::new(self.initial_token_a_price_numerator.into())?
             .checked_mul(b_value)?
-            .checked_div(&(PreciseNumber::new(self.initial_token_a_price_denominator.into())?))?;
+            .checked_div(
+                &(DFSPreciseNumber::new(self.initial_token_a_price_denominator.into())?),
+            )?;
 
         half_m_b_squared.checked_add(&a0_times_b)
     }
@@ -124,9 +129,9 @@ impl LinearPriceCurve {
     /// (integration constant is always 0 since we know there's 0 token A bonded at b = 0)
     fn b_value_with_amt_a_locked_quadratic(
         &self,
-        token_a_amount: &PreciseNumber,
+        token_a_amount: &DFSPreciseNumber,
         should_round_sqrt_up: bool,
-    ) -> Option<PreciseNumber> {
+    ) -> Option<DFSPreciseNumber> {
         // (We're using k/e for quadratic coefficients instead of a/b to not clash with token a/b names)
 
         // k = 0.5 * m
@@ -134,15 +139,15 @@ impl LinearPriceCurve {
         // precision (only 12 decimal digits max) - we're going to be multiplying it against prices (k*b^2) so
         // no need to lose that precision (and as long as slope_numerator/price are all u64 there's plenty of
         // room in PreciseNumber to avoid overflow)
-        let slope_numerator = PreciseNumber::new(self.slope_numerator.into())?;
-        let slope_denominator = PreciseNumber::new(self.slope_denominator.into())?;
-        let k_numerator = slope_numerator.checked_mul(&(PreciseNumber::new(1)?))?;
-        let k_denominator = slope_denominator.checked_mul(&(PreciseNumber::new(2)?))?;
+        let slope_numerator = DFSPreciseNumber::new(self.slope_numerator.into())?;
+        let slope_denominator = DFSPreciseNumber::new(self.slope_denominator.into())?;
+        let k_numerator = slope_numerator.checked_mul(&(DFSPreciseNumber::new(1)?))?;
+        let k_denominator = slope_denominator.checked_mul(&(DFSPreciseNumber::new(2)?))?;
 
         // e = a0
-        let e_value_numerator = PreciseNumber::new(self.initial_token_a_price_numerator.into())?;
+        let e_value_numerator = DFSPreciseNumber::new(self.initial_token_a_price_numerator.into())?;
         let e_value_denominator =
-            PreciseNumber::new(self.initial_token_a_price_denominator.into())?;
+            DFSPreciseNumber::new(self.initial_token_a_price_denominator.into())?;
 
         // solve 0 = k*x^2 + e*x - token_a_amount
         solve_quadratic_positive_root(
@@ -160,8 +165,8 @@ impl LinearPriceCurve {
     /// Otherwise (if there's enough `swap_destination_amount` to handle all the `source_amount`), returns None
     fn maximum_a_remaining_for_swap_a_to_b(
         &self,
-        a_start: &PreciseNumber,
-        b_start: &PreciseNumber,
+        a_start: &DFSPreciseNumber,
+        b_start: &DFSPreciseNumber,
         source_amount: u128,
         swap_destination_amount: u128,
     ) -> Option<(u128, u128)> {
@@ -169,7 +174,7 @@ impl LinearPriceCurve {
         // then the A value is <= source_amount, so only take that amount of A instead and give them all the
         // Bs remaining
         let maximum_b_value =
-            b_start.checked_add(&(PreciseNumber::new(swap_destination_amount)?))?;
+            b_start.checked_add(&(DFSPreciseNumber::new(swap_destination_amount)?))?;
         let maximum_a_locked = self.amt_a_locked_at_b_value_quadratic(&maximum_b_value)?;
         let maximum_a_remaining = maximum_a_locked.checked_sub(&a_start)?.to_imprecise()?;
 
@@ -193,7 +198,7 @@ impl LinearPriceCurve {
         // otherwise there could be some A token in the pool that isn't part of the bonding curve
 
         // quadratic formula version:
-        let a_start = PreciseNumber::new(swap_source_amount)?;
+        let a_start = DFSPreciseNumber::new(swap_source_amount)?;
 
         let b_start = self.b_value_with_amt_a_locked_quadratic(&a_start, true)?;
 
@@ -210,7 +215,7 @@ impl LinearPriceCurve {
 
         // otherwise, there's enough B tokens for all the A they put in, find the b_end value for the amount of A
         // they're putting in and give them `b_end - b_start` tokens out
-        let a_end = a_start.checked_add(&(PreciseNumber::new(source_amount)?))?;
+        let a_end = a_start.checked_add(&(DFSPreciseNumber::new(source_amount)?))?;
 
         let b_end = self.b_value_with_amt_a_locked_quadratic(&a_end, false)?;
 
@@ -235,13 +240,13 @@ impl LinearPriceCurve {
         // make sure we round up here so that b_end and a_end are also over-estimated, which rounds down the final
         // token a output
         let b_start = self.b_value_with_amt_a_locked_quadratic(
-            &(PreciseNumber::new(swap_destination_amount)?),
+            &(DFSPreciseNumber::new(swap_destination_amount)?),
             true,
         )?;
 
         // b_end can be negative if the user put in too many B tokens (handled below)
         let (b_end, b_end_is_negative) =
-            b_start.unsigned_sub(&(PreciseNumber::new(source_amount)?));
+            b_start.unsigned_sub(&(DFSPreciseNumber::new(source_amount)?));
 
         // make sure to use b_end.ceiling() when doing below calculations a_end so we don't round in favor of the user
         // if we use b_end directly, it's possible to gain tokens for free by swapping back and forth due to
@@ -263,7 +268,7 @@ impl LinearPriceCurve {
 
         // PreciseNumber rounds .5+ up by default, make sure to floor instead so we don't allow
         // dust to round up for free
-        let destination_amount = PreciseNumber::new(swap_destination_amount)?
+        let destination_amount = DFSPreciseNumber::new(swap_destination_amount)?
             .checked_sub(&a_end)?
             .floor()?
             .to_imprecise()?;
@@ -282,10 +287,10 @@ fn is_curve_param_valid(curve: &LinearPriceCurve) -> Option<()> {
     };
 
     // since PreciseNumber only has 18 decimals, any slope < 1e-18 will be treated as 0
-    let numerator = PreciseNumber::new(curve.slope_numerator.into())?;
-    let denominator = PreciseNumber::new(curve.slope_denominator.into())?;
-    let minimum =
-        PreciseNumber::new(1)?.checked_div(&(PreciseNumber::new(1_000_000_000_000_000_000)?))?;
+    let numerator = DFSPreciseNumber::new(curve.slope_numerator.into())?;
+    let denominator = DFSPreciseNumber::new(curve.slope_denominator.into())?;
+    let minimum = DFSPreciseNumber::new(1)?
+        .checked_div(&(DFSPreciseNumber::new(1_000_000_000_000_000_000)?))?;
 
     match numerator
         .checked_div(&denominator)?
@@ -418,10 +423,11 @@ impl CurveCalculator for LinearPriceCurve {
         swap_token_b_amount: u128,
     ) -> Option<spl_math::precise_number::PreciseNumber> {
         let b_value_of_a = self.b_value_with_amt_a_locked_quadratic(
-            &(PreciseNumber::new(swap_token_a_amount)?),
+            &(DFSPreciseNumber::new(swap_token_a_amount)?),
             false,
         )?;
-        let total_value = b_value_of_a.checked_add(&(PreciseNumber::new(swap_token_b_amount)?))?;
+        let total_value =
+            b_value_of_a.checked_add(&(DFSPreciseNumber::new(swap_token_b_amount)?))?;
 
         // we only have a precision of 32 bits (9 digits) for sqrt so just truncate to that
         // (it's okay if the curve's value increases as long as the increase is under that precision)
@@ -1824,7 +1830,7 @@ mod tests {
             // so just precalculate a reasonable starting point instead of starting from 1
             let current_a_value = curve
                 .amt_a_locked_at_b_value_quadratic(
-                    &(PreciseNumber::new(starting_supply_b - swap_supply_b).unwrap()),
+                    &(DFSPreciseNumber::new(starting_supply_b - swap_supply_b).unwrap()),
                 )
                 .unwrap()
                 .to_imprecise()
@@ -1832,7 +1838,7 @@ mod tests {
 
             let next_a_value = curve
                 .amt_a_locked_at_b_value_quadratic(
-                    &(PreciseNumber::new(starting_supply_b - swap_supply_b + 1).unwrap()),
+                    &(DFSPreciseNumber::new(starting_supply_b - swap_supply_b + 1).unwrap()),
                 )
                 .unwrap()
                 .to_imprecise()
@@ -1887,7 +1893,7 @@ mod tests {
             // so just precalculate a reasonable starting point instead of starting from 1
             let current_b_value = curve
                 .b_value_with_amt_a_locked_quadratic(
-                    &(PreciseNumber::new(swap_supply_a).unwrap()),
+                    &(DFSPreciseNumber::new(swap_supply_a).unwrap()),
                     false,
                 )
                 .unwrap()
@@ -1902,7 +1908,7 @@ mod tests {
 
             let next_b_value = curve
                 .b_value_with_amt_a_locked_quadratic(
-                    &(PreciseNumber::new(next_a_value).unwrap()),
+                    &(DFSPreciseNumber::new(next_a_value).unwrap()),
                     true,
                 )
                 .unwrap()
@@ -2045,11 +2051,11 @@ mod tests {
         // e == 0
         // x^2 - 25, x = -5 and 5
         let result = solve_quadratic_positive_root(
-            &(PreciseNumber::new(1).unwrap()),
-            &(PreciseNumber::new(1).unwrap()),
-            &(PreciseNumber::new(0).unwrap()),
-            &(PreciseNumber::new(1).unwrap()),
-            &(PreciseNumber::new(25).unwrap()),
+            &(DFSPreciseNumber::new(1).unwrap()),
+            &(DFSPreciseNumber::new(1).unwrap()),
+            &(DFSPreciseNumber::new(0).unwrap()),
+            &(DFSPreciseNumber::new(1).unwrap()),
+            &(DFSPreciseNumber::new(25).unwrap()),
             true,
         )
         .unwrap()
@@ -2060,11 +2066,11 @@ mod tests {
         // c == 0
         // x^2 + 5x, x = -5 and 0
         let result = solve_quadratic_positive_root(
-            &(PreciseNumber::new(5).unwrap()),
-            &(PreciseNumber::new(5).unwrap()), // not reducing to test division
-            &(PreciseNumber::new(10).unwrap()),
-            &(PreciseNumber::new(2).unwrap()), // not reducing to test division
-            &(PreciseNumber::new(0).unwrap()),
+            &(DFSPreciseNumber::new(5).unwrap()),
+            &(DFSPreciseNumber::new(5).unwrap()), // not reducing to test division
+            &(DFSPreciseNumber::new(10).unwrap()),
+            &(DFSPreciseNumber::new(2).unwrap()), // not reducing to test division
+            &(DFSPreciseNumber::new(0).unwrap()),
             true,
         )
         .unwrap()
@@ -2075,11 +2081,11 @@ mod tests {
         // all nonzero
         // x^2 + 4x - 5, x = -5 and 1
         let result = solve_quadratic_positive_root(
-            &(PreciseNumber::new(3).unwrap()),
-            &(PreciseNumber::new(3).unwrap()), // not reducing to test division
-            &(PreciseNumber::new(28).unwrap()),
-            &(PreciseNumber::new(7).unwrap()), // not reducing to test division
-            &(PreciseNumber::new(5).unwrap()),
+            &(DFSPreciseNumber::new(3).unwrap()),
+            &(DFSPreciseNumber::new(3).unwrap()), // not reducing to test division
+            &(DFSPreciseNumber::new(28).unwrap()),
+            &(DFSPreciseNumber::new(7).unwrap()), // not reducing to test division
+            &(DFSPreciseNumber::new(5).unwrap()),
             true,
         )
         .unwrap()

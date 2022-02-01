@@ -1,12 +1,12 @@
 [package]
-name = "anchor-token-swap"
+name = "token-bonding-curve"
 version = "3.0.0"
-description = "Anchor framework fork Solana Program Library Token Swap"
+description = "A fork of Solana Program Library Token Swap that implements a linear token bonding curve type"
 authors = [
   "Solana Maintainers <maintainers@solana.foundation>",
   "DFS Tech, Inc (Rally)",
 ]
-repository = "https://github.com/rally-dfs/anchor-token-swap/"
+repository = "https://github.com/rally-dfs/token-bonding-curve/"
 license = "Apache-2.0"
 edition = "2018"
 

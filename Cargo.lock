@@ -194,26 +194,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anchor-token-swap"
-version = "3.0.0"
-dependencies = [
- "anchor-lang",
- "arbitrary",
- "arrayref",
- "enum_dispatch",
- "num-derive",
- "num-traits",
- "proptest",
- "roots",
- "sim",
- "solana-program",
- "solana-sdk",
- "spl-math",
- "spl-token",
- "thiserror",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1927,6 +1907,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "token-bonding-curve"
+version = "3.0.0"
+dependencies = [
+ "anchor-lang",
+ "arbitrary",
+ "arrayref",
+ "enum_dispatch",
+ "num-derive",
+ "num-traits",
+ "proptest",
+ "roots",
+ "sim",
+ "solana-program",
+ "solana-sdk",
+ "spl-math",
+ "spl-token",
+ "thiserror",
 ]
 
 [[package]]

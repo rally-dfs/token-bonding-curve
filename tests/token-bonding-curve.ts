@@ -120,7 +120,7 @@ const mintToAccount = async (
   await provider.send(tx, [authority]);
 }
 
-describe('anchor-token-swap', () => {
+describe('token-bonding-curve', () => {
 
   // Configure the client to use the local cluster.
   const provider = anchor.Provider.env();
@@ -128,7 +128,7 @@ describe('anchor-token-swap', () => {
 
   it('should perform constant price swap!', async () => {
 
-    const program = anchor.workspace.AnchorTokenSwap;
+    const program = anchor.workspace.TokenBondingCurve;
 
     // TODO: doing these in separate txns is really slow, could probably be optimized
 
@@ -342,7 +342,7 @@ describe('anchor-token-swap', () => {
   };
 
   it('should initialize linear price swap!', async () => {
-    const program = anchor.workspace.AnchorTokenSwap;
+    const program = anchor.workspace.TokenBondingCurve;
 
     const {
       rTokenMintAuthority,
@@ -619,7 +619,7 @@ describe('anchor-token-swap', () => {
 
   it('should fail invalid linear price swaps!', async () => {
 
-    const program = anchor.workspace.AnchorTokenSwap;
+    const program = anchor.workspace.TokenBondingCurve;
 
     const {
       rTokenMintAuthority,
@@ -691,7 +691,7 @@ describe('anchor-token-swap', () => {
   });
 
   it('should disallow linear price swaps deposits/withdrawals!', async () => {
-    const program = anchor.workspace.AnchorTokenSwap;
+    const program = anchor.workspace.TokenBondingCurve;
 
     const {
       rTokenMintAuthority,
@@ -854,7 +854,7 @@ describe('anchor-token-swap', () => {
   });
 
   it('should handle taki low slope!', async () => {
-    const program = anchor.workspace.AnchorTokenSwap;
+    const program = anchor.workspace.TokenBondingCurve;
 
     const {
       rTokenMintAuthority,

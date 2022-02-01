@@ -19,7 +19,7 @@ declare_id!("TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq");
 
 /// documentation
 #[program]
-mod anchor_token_swap {
+mod token_bonding_curve {
     use super::*;
 
     ///   Creates an 'initialize' instruction with ConstantPrice curve

@@ -1,6 +1,6 @@
 {
-  "name": "@rally/anchor-token-swap",
-  "description": "Anchor framework fork of Solana Program Library Token Swap",
+  "name": "@rally/token-bonding-curve",
+  "description": "A fork of Solana Program Library Token Swap that implements a linear token bonding curve type",
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/rally-dfs/anchor-token-swap/"
+    "url": "https://github.com/rally-dfs/token-bonding-curve/"
   },
   "files": [],
   "engines": {

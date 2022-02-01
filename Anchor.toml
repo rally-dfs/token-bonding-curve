@@ -1,5 +1,5 @@
 [programs.localnet]
-anchor_token_swap = "TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq"
+token_bonding_curve = "TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq"
 
 [registry]
 url = "https://anchor.projectserum.com"

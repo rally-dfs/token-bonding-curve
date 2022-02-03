@@ -1,94 +1,21 @@
-# Token Swap Program
+token-bonding-curve is forked from anchor-token-swap (which is a fork of spl token-swap with anchor added) with a custom LinearPriceCurve type added in src/curve/linear_price.rs. It models a curve where the price of the output `token b` increases at a linear rate as more collateral `token a` has been swapped in. See docs in linear_price.rs for more calculation details and cavets. 
 
-A Uniswap-like exchange for the Token program on the Solana blockchain, deployed
-to `SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8` on all networks.
+e.g. a curve with formula `a = 3b + 2` – where a is the price of a single bonded `token b` (denominated in amount of `token a`) and b is the amount of `token b` that's been swapped out of this curve – starts at a price of `2 token A in required to get 1 token B out` when 0 `token b` has been exchanged and increases by `3 token A to get 1 token B out` for every 1 `token b` that's swapped out
 
-Full documentation is available at https://spl.solana.com/token-swap
+Under the hood it uses the integral of the price formula to calculate the amount of `token a` locked in the curve and uses that to determine the spot price and the amount of destination token to emit 
 
-JavaScript bindings are available in the `./js` directory.
+Pool tokens and deposits/withdrawals of pool tokens are intentionally disabled so that liquidity can't be added/removed from the swap outside of the `swap` instruction. If more liquidity is required, a second curve can be initialized with the same slope and an appropriately set start price (e.g. the end price of the previous curve). Fees are also disabled (at the instruction level, see lib.rs:initialize_linear_price).
 
-## Building
+See https://github.com/rally-dfs/anchor-token-swap/blob/main/README.md and https://github.com/solana-labs/solana-program-library/tree/master/token-swap where this was forked from too
 
-To build a development version of the Token Swap program, you can use the normal
-build command for Solana programs:
+# Running tests
 
-```sh
-cargo build-bpf
-```
+The main tests (that weren't already in spl token) are in linear_price.rs and dfs_precise_number.rs
 
-For production versions, the Token Swap Program contains a `production` feature
-to fix constraints on fees and fee account owner. A developer can
-deploy the program, allow others to create pools, and earn a "protocol fee" on
-all activity.
+`$ cargo test --package token-bonding-curve --lib -- dfs_precise_number::tests linear_price::tests`
 
-Since Solana programs cannot contain any modifiable state, we must hard-code
-all constraints into the program.  `SwapConstraints` in `program/src/constraints.rs`
-contains all hard-coded fields for fees.  Additionally the
-`SWAP_PROGRAM_OWNER_FEE_ADDRESS` environment variable specifies the public key
-that must own all fee accounts.
+and in token-bonding-curve.ts. This takes a lot longer to run than the rs tests since it's actually making end to end calls to the validator, but it's the only way to test that we aren't overflowing compute.
 
-You can build the production version of Token Swap running on devnet, testnet, and
-mainnet-beta using the following command:
+`$ ANCHOR_WALLET=~/.config/solana/id.json anchor test`
 
-```sh
-SWAP_PROGRAM_OWNER_FEE_ADDRESS=HfoTxFR1Tm6kGmWgYWD6J7YHVy1UwqSULUGVLXkJqaKN cargo build-bpf --features=production
-```
-
-## Testing
-
-### Unit tests
-
-Run unit tests from `./program/` using:
-
-```sh
-cargo test
-```
-
-### Fuzz tests
-
-Using the Rust version of `honggfuzz`, we "fuzz" the Token Swap program every night.
-Install `honggfuzz` with:
-
-```sh
-cargo install honggfuzz
-```
-
-From there, run fuzzing from `./program/fuzz` with:
-
-```sh
-cargo hfuzz run token-swap-instructions
-```
-
-If the program crashes or errors, `honggfuzz` dumps a `.fuzz` file in the workspace,
-so you can debug the failing input using:
-
-```sh
-cargo hfuzz run-debug token-swap-instructions hfuzz_workspace/token-swap-instructions/*fuzz
-```
-
-This command attaches a debugger to the test, allowing you to easily see the
-exact problem.
-
-### Integration tests
-
-You can test the JavaScript bindings and on-chain interactions using
-`solana-test-validator`, included in the Solana Tool Suite.  See the
-[CLI installation instructions](https://docs.solana.com/cli/install-solana-cli-tools).
-
-From `./js`, install the required modules:
-
-```sh
-npm i
-```
-
-Then run all tests:
-
-```sh
-npm run start-with-test-validator
-```
-
-If you are testing a production build, use:
-
-```sh
-SWAP_PROGRAM_OWNER_FEE_ADDRESS="HfoTxFR1Tm6kGmWgYWD6J7YHVy1UwqSULUGVLXkJqaKN" npm run start-with-test-validator
-```
+(Note thisrequires installing anchor CLI via cargo install, e.g. `cargo install --git https://github.com/project-serum/anchor --tag v0.20.1 anchor-cli --locked`)

@@ -1,6 +1,6 @@
 //! Program state processor
 
-use crate::constraints::{SwapConstraints, SWAP_CONSTRAINTS};
+use crate::constraints::SwapConstraints;
 use crate::{
     curve::{
         base::SwapCurve,
@@ -8,10 +8,6 @@ use crate::{
         fees::Fees,
     },
     error::SwapError,
-    instruction::{
-        DepositAllTokenTypes, DepositSingleTokenTypeExactAmountIn, Initialize, Swap,
-        SwapInstruction, WithdrawAllTokenTypes, WithdrawSingleTokenTypeExactAmountOut,
-    },
     state::{SwapState, SwapV1, SwapVersion},
 };
 use num_traits::FromPrimitive;
@@ -979,90 +975,6 @@ impl Processor {
 
         Ok(())
     }
-
-    /// Processes an [Instruction](enum.Instruction.html).
-    pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], input: &[u8]) -> ProgramResult {
-        Self::process_with_constraints(program_id, accounts, input, &SWAP_CONSTRAINTS)
-    }
-
-    /// Processes an instruction given extra constraint
-    pub fn process_with_constraints(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        input: &[u8],
-        swap_constraints: &Option<SwapConstraints>,
-    ) -> ProgramResult {
-        let instruction = SwapInstruction::unpack(input)?;
-        match instruction {
-            SwapInstruction::Initialize(Initialize { fees, swap_curve }) => {
-                msg!("Instruction: Init");
-                Self::process_initialize(program_id, fees, swap_curve, accounts, swap_constraints)
-            }
-            SwapInstruction::Swap(Swap {
-                amount_in,
-                minimum_amount_out,
-            }) => {
-                msg!("Instruction: Swap");
-                Self::process_swap(program_id, amount_in, minimum_amount_out, accounts)
-            }
-            SwapInstruction::DepositAllTokenTypes(DepositAllTokenTypes {
-                pool_token_amount,
-                maximum_token_a_amount,
-                maximum_token_b_amount,
-            }) => {
-                msg!("Instruction: DepositAllTokenTypes");
-                Self::process_deposit_all_token_types(
-                    program_id,
-                    pool_token_amount,
-                    maximum_token_a_amount,
-                    maximum_token_b_amount,
-                    accounts,
-                )
-            }
-            SwapInstruction::WithdrawAllTokenTypes(WithdrawAllTokenTypes {
-                pool_token_amount,
-                minimum_token_a_amount,
-                minimum_token_b_amount,
-            }) => {
-                msg!("Instruction: WithdrawAllTokenTypes");
-                Self::process_withdraw_all_token_types(
-                    program_id,
-                    pool_token_amount,
-                    minimum_token_a_amount,
-                    minimum_token_b_amount,
-                    accounts,
-                )
-            }
-            SwapInstruction::DepositSingleTokenTypeExactAmountIn(
-                DepositSingleTokenTypeExactAmountIn {
-                    source_token_amount,
-                    minimum_pool_token_amount,
-                },
-            ) => {
-                msg!("Instruction: DepositSingleTokenTypeExactAmountIn");
-                Self::process_deposit_single_token_type_exact_amount_in(
-                    program_id,
-                    source_token_amount,
-                    minimum_pool_token_amount,
-                    accounts,
-                )
-            }
-            SwapInstruction::WithdrawSingleTokenTypeExactAmountOut(
-                WithdrawSingleTokenTypeExactAmountOut {
-                    destination_token_amount,
-                    maximum_pool_token_amount,
-                },
-            ) => {
-                msg!("Instruction: WithdrawSingleTokenTypeExactAmountOut");
-                Self::process_withdraw_single_token_type_exact_amount_out(
-                    program_id,
-                    destination_token_amount,
-                    maximum_pool_token_amount,
-                    accounts,
-                )
-            }
-        }
-    }
 }
 
 impl PrintProgramError for SwapError {
@@ -1140,7 +1052,7 @@ fn to_u128(val: u64) -> Result<u128, SwapError> {
 fn to_u64(val: u128) -> Result<u64, SwapError> {
     val.try_into().map_err(|_| SwapError::ConversionFailure)
 }
-
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6856,3 +6768,4 @@ mod tests {
             .unwrap();
     }
 }
+*/

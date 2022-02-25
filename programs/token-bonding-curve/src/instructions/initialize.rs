@@ -19,7 +19,7 @@ pub struct Initialize<'info> {
     pub token_a: AccountInfo<'info>,
     ///   3. `[]` token_b Account. Must be non zero, owned by swap authority.
     pub token_b: AccountInfo<'info>,
-    ///   4. `[writable]` Pool Token Mint. Must be empty, owned by swap authority.
+    ///   4. `[writable]` Pool Token Mint. Must be empty, owned by swap authority. Freeze authority must be null.
     #[account(mut)]
     pub pool: AccountInfo<'info>,
     ///   5. `[]` Pool Token Account to deposit trading and withdraw fees.

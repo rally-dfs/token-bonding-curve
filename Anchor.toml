@@ -1,11 +1,14 @@
 [programs.localnet]
 token_bonding_curve = "TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq"
 
+[programs.mainnet]
+token_bonding_curve = "TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq"
+
 [registry]
 url = "https://anchor.projectserum.com"
 
 [provider]
-cluster = "localnet"
+cluster = "mainnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

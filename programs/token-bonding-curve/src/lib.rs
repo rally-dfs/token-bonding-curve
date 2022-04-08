@@ -2,6 +2,8 @@
 
 use anchor_lang::prelude::*;
 
+use solana_security_txt::security_txt;
+
 mod instructions;
 
 pub mod constraints;
@@ -14,7 +16,15 @@ pub mod state;
 use curve::fees::Fees;
 use instructions::*;
 
-// solana_program::declare_id!("SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8");
+security_txt! {
+    name: "Token Bonding Curve",
+    project_url: "https://rly.network/",
+    contacts: "email:security@rly.network",
+    policy: "https://rly.network/security-policy",
+    preferred_languages: "en",
+    source_code: "https://github.com/rally-dfs/token-bonding-curve"
+}
+
 declare_id!("TBCwReYDDw8SvwVVKJHgatzeXKrLHnaTPyDGwkUoBsq");
 
 /// documentation

@@ -27,6 +27,7 @@ thiserror = "1.0.30"
 arbitrary = { version = "1.0.3", features = ["derive"], optional = true }
 roots = { version = "0.0.7", optional = true }
 anchor-lang = "0.20.1"
+solana-security-txt = "1.0.1"
 
 [dev-dependencies]
 solana-sdk = "1.9.5"

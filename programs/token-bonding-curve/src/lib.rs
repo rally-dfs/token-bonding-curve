@@ -16,6 +16,7 @@ pub mod state;
 use curve::fees::Fees;
 use instructions::*;
 
+#[cfg(not(feature = "no-entrypoint"))]
 security_txt! {
     name: "Token Bonding Curve",
     project_url: "https://rly.network/",
